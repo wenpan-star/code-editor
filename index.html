@@ -1,0 +1,3061 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+  <title>在线代码编辑器 · 专业版 v5.0.0</title>
+  <!--
+  ================================================================================
+   版本：v5.0.0（性能革命与安全加固版）
+   更新日期：2026-06-07
+   本次重大更新：
+     - 语法高亮完全迁移至 Web Worker 独立线程，主线程永不阻塞，大文件编辑/替换流畅无卡顿
+     - 全部替换时若文件超过阈值且高亮开启，自动临时关闭高亮并提示用户（操作后恢复）
+     - 导入大文件时增加 Loading 提示，防止重复操作；关闭高亮期间仅显示转义文本，性能提升
+     - 正则匹配增加超时保护（Worker 内 150ms 超时），防范 ReDoS 攻击
+     - 优化行号统计：使用 .match(/\n/g) 计数代替 split('\n') 减少内存分配
+     - 所有原有功能、界面、主题、快捷键、自动保存、目录保存等完全保留，无任何降级
+     - Worker 生命周期管理完善，页面关闭时彻底终止并释放资源
+   历史更新（v4.3.0）：
+     - 语法高亮引擎重写：先保护字符串，再处理注释/关键字，杜绝字符串内误高亮
+     - 高亮调度增加时间防抖（80ms），快速输入更流畅
+     - 行号虚拟滚动 + 输入时仅更新统计，大幅降低大文件卡顿
+     - 加载文件时智能关闭/恢复高亮，避免导入大文件时界面冻结
+     - 加强正则安全校验，防范 ReDoS 攻击
+     - 复制功能增加 execCommand 降级保障
+     - Worker 创建后立即释放 Blob URL，防止内存泄漏
+     - 滚动事件节流，同步行号更平滑
+     - 转义函数增强，补充单双引号转义，安全性提升
+     - Shadow DOM 隔离高亮，CSS 变量同步
+     - IndexedDB 突破 5MB 存储限制
+     - 大文件自动关闭实时高亮（5000 行阈值）
+     - 用户强制开启高亮标志，防止反复关闭
+     - Ctrl+S 手动保存，Worker 销毁等
+  ================================================================================
+  -->
+  <style>
+    /* ========== CSS 变量（暗色主题默认） ========== */
+    :root {
+      --bg: #1a1b26;
+      --surface: #1f2030;
+      --surface-light: #292a3a;
+      --text: #cdd6f4;
+      --text-secondary: #9aa0b0;
+      --accent: #7aa2f7;
+      --accent-hover: #5d8bf4;
+      --green: #a3be8c;
+      --green-bg: rgba(163, 190, 140, 0.15);
+      --red: #f38ba8;
+      --border: #3b3d54;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      --editor-font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
+      --editor-font-size: 14px;
+      --editor-line-height: 1.7;
+      --selection-bg: rgba(255, 220, 0, 0.35);
+      --caret-color: #f5c542;
+      /* 语法高亮 */
+      --hl-kw: #cba6f7;
+      --hl-str: #a6e3a1;
+      --hl-num: #fab387;
+      --hl-cmt: #6c7086;
+      --hl-fn: #89b4fa;
+      --hl-tag: #89b4fa;
+      --hl-attr: #a6e3a1;
+      --hl-prop: #89dceb;
+      --hl-op: #89dceb;
+      --hl-punc: #bac2de;
+      --hl-search-bg: rgba(255, 215, 0, 0.35);
+      --hl-bracket-bg: rgba(255, 255, 255, 0.25);
+      --scrollbar-thumb: #45475a;
+      --scrollbar-thumb-hover: #585b70;
+      --toast-bg: var(--green-bg);
+      --toast-color: var(--green);
+    }
+
+    /* 亮色主题 */
+    [data-theme="light"] {
+      --bg: #f4f5f7;
+      --surface: #ebedf0;
+      --surface-light: #e2e4e8;
+      --text: #1e1e2e;
+      --text-secondary: #555;
+      --accent: #3b6ef0;
+      --accent-hover: #2b5cd6;
+      --green: #1c7a3e;
+      --green-bg: rgba(28, 122, 62, 0.12);
+      --red: #c5221f;
+      --border: #d0d3d8;
+      --shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+      --selection-bg: rgba(255, 200, 0, 0.3);
+      --caret-color: #e8a800;
+      --hl-kw: #7c3aed;
+      --hl-str: #059669;
+      --hl-num: #d97706;
+      --hl-cmt: #9ca3af;
+      --hl-fn: #2563eb;
+      --hl-tag: #2563eb;
+      --hl-attr: #059669;
+      --hl-prop: #0e7490;
+      --hl-op: #0e7490;
+      --hl-punc: #6b7280;
+      --hl-search-bg: rgba(250, 204, 21, 0.45);
+      --hl-bracket-bg: rgba(0, 0, 0, 0.12);
+      --scrollbar-thumb: #c4c4c4;
+      --scrollbar-thumb-hover: #a8a8a8;
+    }
+
+    /* 墨蓝主题 */
+    [data-theme="ink"] {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface-light: #334155;
+      --text: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --accent: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --green: #4ade80;
+      --green-bg: rgba(74, 222, 128, 0.15);
+      --red: #fb7185;
+      --border: #334155;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+      --selection-bg: rgba(56, 189, 248, 0.3);
+      --caret-color: #38bdf8;
+      --hl-kw: #c084fc;
+      --hl-str: #86efac;
+      --hl-num: #fbbf24;
+      --hl-cmt: #64748b;
+      --hl-fn: #7dd3fc;
+      --hl-tag: #7dd3fc;
+      --hl-attr: #86efac;
+      --hl-prop: #67e8f9;
+      --hl-op: #67e8f9;
+      --hl-punc: #cbd5e1;
+      --hl-search-bg: rgba(250, 204, 21, 0.45);
+      --hl-bracket-bg: rgba(255, 255, 255, 0.2);
+      --scrollbar-thumb: #475569;
+      --scrollbar-thumb-hover: #64748b;
+    }
+
+    /* 米白主题 */
+    [data-theme="cream"] {
+      --bg: #faf8f5;
+      --surface: #f0ede6;
+      --surface-light: #e6e1d9;
+      --text: #3d3a35;
+      --text-secondary: #6b6560;
+      --accent: #9b6b3d;
+      --accent-hover: #7e552e;
+      --green: #4b7a3b;
+      --green-bg: rgba(75, 122, 59, 0.1);
+      --red: #b5453a;
+      --border: #d6cfc4;
+      --shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+      --selection-bg: rgba(155, 107, 61, 0.15);
+      --caret-color: #9b6b3d;
+      --hl-kw: #8b5c3a;
+      --hl-str: #4a7c3f;
+      --hl-num: #c07a32;
+      --hl-cmt: #a39a8c;
+      --hl-fn: #6d8a5e;
+      --hl-tag: #6d8a5e;
+      --hl-attr: #4a7c3f;
+      --hl-prop: #5f8c7a;
+      --hl-op: #5f8c7a;
+      --hl-punc: #8a8074;
+      --hl-search-bg: rgba(200, 160, 40, 0.3);
+      --hl-bracket-bg: rgba(0, 0, 0, 0.08);
+      --scrollbar-thumb: #c4bdb2;
+      --scrollbar-thumb-hover: #a89f92;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: #0d0e17;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.3s;
+    }
+    [data-theme="light"] body { background: #e5e7eb; }
+    [data-theme="ink"] body { background: #020617; }
+    [data-theme="cream"] body { background: #e8e3d8; }
+
+    .container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      transition: background 0.3s;
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+
+    /* 工具栏 */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+      flex-wrap: wrap;
+      transition: background 0.3s;
+      backdrop-filter: blur(10px);
+    }
+    .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 6px; }
+    .toolbar-right { flex-wrap: wrap; }
+    .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+    .dot-red { background: #f38ba8; }
+    .dot-yellow { background: #fab387; }
+    .dot-green { background: #a6e3a1; }
+    .file-name {
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      margin-left: 6px;
+      letter-spacing: 0.2px;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .modified-dot {
+      display: none;
+      width: 7px; height: 7px;
+      background: var(--accent);
+      border-radius: 50%;
+      margin-left: 2px;
+      animation: modifiedPulse 1.2s infinite;
+    }
+    @keyframes modifiedPulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+
+    .lang-label, .btn {
+      font-family: inherit;
+      letter-spacing: 0.2px;
+      user-select: none;
+      transition: all var(--transition);
+      cursor: pointer;
+      outline: none;
+      border: 1px solid transparent;
+    }
+    .lang-label {
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--surface-light);
+      padding: 4px 10px;
+      border-radius: 18px;
+    }
+    .lang-label:hover { border-color: var(--border); color: var(--text); }
+    .lang-label.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(137, 180, 250, 0.08);
+      box-shadow: 0 0 8px rgba(137,180,250,0.2);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 6px 12px;
+      border-radius: 18px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      background: transparent;
+      color: var(--text);
+      line-height: 1;
+      min-width: 32px;
+    }
+    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .btn:disabled { opacity: 0.35; pointer-events: none; }
+    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover); border-color: var(--accent-hover);
+      transform: translateY(-1px); box-shadow: 0 4px 12px rgba(137, 180, 250, 0.3);
+    }
+    .btn-primary:active:not(:disabled) { transform: scale(0.96); }
+    .btn-secondary { background: var(--surface-light); color: var(--text); border-color: var(--border); }
+    .btn-secondary:hover:not(:disabled) { background: #3e405e; border-color: #5a5a78; transform: translateY(-1px); }
+    .btn-ghost { background: transparent; color: var(--text-secondary); border-color: transparent; padding: 6px 8px; }
+    .btn-ghost:hover:not(:disabled) { background: var(--surface-light); color: var(--text); }
+    .btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+    /* 大文件警告条 */
+    .large-file-warning {
+      display: none;
+      background: #f38ba8;
+      color: #fff;
+      text-align: center;
+      padding: 4px 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .large-file-warning button {
+      background: rgba(255,255,255,0.3);
+      border: none;
+      color: inherit;
+      padding: 2px 10px;
+      margin-left: 8px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    /* 查找替换弹窗 */
+    .replace-modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.6);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(2px);
+    }
+    .replace-modal-overlay.open { display: flex; }
+
+    .replace-modal {
+      background: var(--bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      border: 1px solid var(--border);
+      width: 620px;
+      max-width: 92vw;
+      display: flex;
+      flex-direction: column;
+      overflow: visible;
+      position: relative;
+    }
+    .replace-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 18px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      cursor: move;
+      user-select: none;
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .replace-modal-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .replace-modal-close {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 18px;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    .replace-modal-body {
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .replace-row {
+      display: flex;
+      gap: 12px;
+    }
+    .replace-field {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .replace-field label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+    .replace-field textarea {
+      background: var(--surface-light);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-family: var(--editor-font);
+      outline: none;
+      resize: vertical;
+      min-height: 2.8em;
+      max-height: 120px;
+      overflow-y: auto;
+      transition: border-color var(--transition);
+      line-height: 1.5;
+    }
+    .replace-field textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
+    }
+    .replace-options {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .replace-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .match-count {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-right: auto;
+    }
+
+    /* 调整大小手柄 */
+    .resize-handle {
+      position: absolute;
+      z-index: 10;
+    }
+    .resize-handle-right {
+      top: 0;
+      right: 0;
+      width: 6px;
+      height: 100%;
+      cursor: ew-resize;
+    }
+    .resize-handle-bottom {
+      left: 0;
+      bottom: 0;
+      width: 100%;
+      height: 6px;
+      cursor: ns-resize;
+    }
+    .resize-handle-corner {
+      right: 0;
+      bottom: 0;
+      width: 14px;
+      height: 14px;
+      cursor: nwse-resize;
+    }
+
+    /* 编辑器主体 */
+    .editor-wrapper {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      background: var(--bg);
+      transition: background 0.3s;
+    }
+    .line-numbers {
+      flex-shrink: 0;
+      width: 50px;
+      background: var(--surface);
+      padding: 12px 0;
+      overflow: hidden;
+      user-select: none;
+      text-align: right;
+      font-family: var(--editor-font);
+      font-size: var(--editor-font-size);
+      line-height: var(--editor-line-height);
+      color: #5a5d78;
+      border-right: 1px solid var(--border);
+      pointer-events: none;
+      transition: background 0.3s;
+    }
+    .line-numbers span { display: block; padding-right: 12px; }
+    .code-area { flex: 1; position: relative; overflow: hidden; }
+
+    #codeEditor, .highlight-layer {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      margin: 0; background: transparent; border: none; outline: none; resize: none;
+      padding: 12px 18px;
+      font-family: var(--editor-font);
+      font-size: var(--editor-font-size);
+      line-height: var(--editor-line-height);
+      tab-size: 4; -moz-tab-size: 4;
+      white-space: pre;
+      overflow-wrap: normal; word-wrap: normal;
+      overflow-x: auto; overflow-y: scroll;
+      letter-spacing: 0; box-sizing: border-box;
+    }
+    #codeEditor {
+      z-index: 2;
+      caret-color: var(--caret-color);
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+    }
+    #codeEditor::selection { background: var(--selection-bg); }
+    .highlight-layer {
+      z-index: 1; pointer-events: none; color: var(--text); overflow: hidden;
+    }
+    .highlight-layer.wrap-enabled {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* 滚动条 */
+    #codeEditor::-webkit-scrollbar, .highlight-layer::-webkit-scrollbar { width: 5px; height: 5px; }
+    #codeEditor::-webkit-scrollbar-track, .highlight-layer::-webkit-scrollbar-track { background: transparent; }
+    #codeEditor::-webkit-scrollbar-thumb, .highlight-layer::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 8px; }
+    #codeEditor::-webkit-scrollbar-thumb:hover, .highlight-layer::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+    /* 状态栏 */
+    .status-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 16px; background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--text-secondary);
+      letter-spacing: 0.2px; user-select: none; flex-wrap: wrap; gap: 10px;
+      transition: background 0.3s;
+    }
+    .status-item { display: flex; align-items: center; gap: 6px; }
+    .status-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green); animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .indent-indicator {
+      cursor: pointer;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: var(--surface-light);
+      font-weight: 600;
+      transition: background 0.2s;
+      font-size: 10px;
+    }
+    .indent-indicator:hover { background: var(--border); }
+
+    /* Toast */
+    .toast {
+      position: fixed; top: 28px; left: 50%;
+      transform: translateX(-50%) translateY(-120px);
+      background: var(--toast-bg); color: var(--toast-color);
+      padding: 10px 20px; border-radius: 24px;
+      font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
+      z-index: 9999; pointer-events: none; opacity: 0;
+      transition: all 0.35s cubic-bezier(0.22, 0.61, 0.36, 1);
+      border: 1px solid rgba(166, 227, 161, 0.3);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); white-space: nowrap;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast.error {
+      background: rgba(243, 139, 168, 0.15); color: var(--red);
+      border-color: rgba(243, 139, 168, 0.35);
+    }
+
+    /* 快捷键帮助弹窗 */
+    .modal-overlay {
+      display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.55); z-index: 1000; justify-content: center; align-items: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--bg); border-radius: var(--radius); padding: 24px;
+      max-width: 480px; width: 90%; color: var(--text);
+      box-shadow: var(--shadow); border: 1px solid var(--border);
+    }
+    .modal h2 { margin-bottom: 16px; font-size: 18px; }
+    .modal kbd {
+      background: var(--surface-light); padding: 2px 6px;
+      border-radius: 4px; font-family: var(--editor-font); font-size: 11px; margin: 0 4px;
+    }
+    .modal .shortcut-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+    .modal .close-btn { margin-top: 16px; }
+
+    /* 响应式 */
+    @media (max-width: 640px) {
+      .toolbar { padding: 6px 12px; }
+      .btn { padding: 5px 10px; font-size: 11px; }
+      .line-numbers { width: 38px; font-size: 11px; }
+      #codeEditor, .highlight-layer { font-size: 12px; padding: 10px 12px; }
+      .replace-row { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+<!-- 大文件警告条（默认隐藏） -->
+<div class="large-file-warning" id="largeFileWarning">
+  ⚠️ 文件较大，已自动关闭实时高亮以保障性能
+  <button id="btnEnableHighlight">开启高亮</button>
+  <button id="btnDisableHighlight" style="display:none;">关闭高亮</button>
+</div>
+
+<div class="container" id="appContainer">
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <span class="dot dot-red"></span><span class="dot dot-yellow"></span><span class="dot dot-green"></span>
+      <span class="file-name">📄 code-editor.html <span class="modified-dot" id="modifiedDot" title="未保存的更改"></span></span>
+    </div>
+    <div class="toolbar-right">
+      <button class="btn lang-label active" data-lang="js" aria-pressed="true">JS</button>
+      <button class="btn lang-label" data-lang="html" aria-pressed="false">HTML</button>
+      <button class="btn lang-label" data-lang="css" aria-pressed="false">CSS</button>
+      <button class="btn lang-label" data-lang="python" aria-pressed="false">PY</button>
+      <button class="btn btn-ghost" id="btnUndo" title="撤销" aria-label="撤销">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+      </button>
+      <button class="btn btn-ghost" id="btnRedo" title="重做" aria-label="重做">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/></svg>
+      </button>
+      <button class="btn btn-ghost" id="btnClear" title="清空编辑器" aria-label="清空代码">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/></svg>
+      </button>
+      <button class="btn btn-ghost" id="btnSelectAll" title="全选代码" aria-label="全选代码">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3 7h-6l3-7z"/><path d="M5 11h14v8a2 2 0 01-2 2H7a2 2 0 01-2-2v-8z"/><path d="M9 16l2 2 4-4"/></svg>
+      </button>
+      <button class="btn btn-ghost" id="btnWrap" title="切换自动换行">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="4" rx="1"/><rect x="3" y="11" width="14" height="4" rx="1"/><rect x="3" y="17" width="16" height="4" rx="1"/><polyline points="19 15 22 18 19 21"/></svg>
+      </button>
+      <button class="btn btn-secondary" id="btnToggleReplace" title="查找替换">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="6"/><path d="M16 16l5 5"/></svg>
+      </button>
+      <button class="btn btn-primary" id="btnCopy">
+        <svg id="copyIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        <svg id="checkIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:none;"><polyline points="20 6 9 17 4 12"/></svg>
+        <span id="copyText">复制</span>
+      </button>
+      <button class="btn btn-ghost" id="btnImport" title="导入文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
+      <button class="btn btn-ghost" id="btnDownload" title="下载文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+      <button class="btn btn-ghost" id="btnChangeSaveDir" title="更改保存位置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 11 15 14"/></svg></button>
+      <button class="btn btn-ghost" id="btnTheme" title="切换主题">☀️</button>
+      <button class="btn btn-ghost" id="btnHelp" title="快捷键">?</button>
+    </div>
+  </div>
+
+  <div class="editor-wrapper" id="editorWrapper">
+    <div class="line-numbers" id="lineNumbers" aria-hidden="true"></div>
+    <div class="code-area">
+      <!-- Shadow DOM 宿主元素，承载语法高亮 -->
+      <div id="highlightHost" style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:1;overflow:hidden;"></div>
+      <textarea id="codeEditor" placeholder="// 在此输入或粘贴代码...&#10;// 支持 JS/HTML/CSS/Python&#10;// 点击右上角按钮复制，或使用替换功能 ✨" spellcheck="false" autocorrect="off" autocapitalize="off" wrap="off"></textarea>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-item"><span class="status-dot"></span><span>就绪</span></div>
+    <div class="status-item"><span id="lineCount">行: 0</span> · <span id="charCount">字符: 0</span> · <span id="cursorPos">行:1 列:1</span></div>
+    <div class="status-item"><span id="langDisplay">JavaScript</span></div>
+    <div class="status-item">缩进 <span class="indent-indicator" id="indentIndicator" title="点击切换">4空格</span></div>
+    <div class="status-item" id="autoSaveStatus" style="color:var(--green);">💾 自动保存</div>
+  </div>
+</div>
+
+<!-- 查找替换弹窗 -->
+<div class="replace-modal-overlay" id="replaceModalOverlay">
+  <div class="replace-modal" id="replaceModal">
+    <div class="replace-modal-header" id="replaceModalHeader">
+      <span class="replace-modal-title">查找与替换</span>
+      <button class="replace-modal-close" id="replaceModalClose" title="关闭">✕</button>
+    </div>
+    <div class="replace-modal-body">
+      <div class="replace-row">
+        <div class="replace-field">
+          <label for="replaceFind">查找内容</label>
+          <textarea id="replaceFind" placeholder="支持多行 及 正则表达式" rows="2"></textarea>
+        </div>
+        <div class="replace-field">
+          <label for="replaceWith">替换为</label>
+          <textarea id="replaceWith" placeholder="替换文本" rows="2"></textarea>
+        </div>
+      </div>
+      <div class="replace-options">
+        <label><input type="checkbox" id="replaceCaseSensitive"> Aa 区分大小写</label>
+        <label><input type="checkbox" id="replaceWholeWord"> 全词匹配</label>
+        <label><input type="checkbox" id="replaceUseRegex"> [.*] 正则表达式</label>
+      </div>
+      <div class="replace-actions">
+        <span class="match-count" id="matchCount"></span>
+        <button class="btn btn-secondary" id="btnFindNext">查找下一个</button>
+        <button class="btn btn-secondary" id="btnReplaceOne">替换</button>
+        <button class="btn btn-primary" id="btnReplaceAll">全部替换</button>
+      </div>
+    </div>
+    <!-- 调整大小手柄 -->
+    <div class="resize-handle resize-handle-right" id="resizeHandleRight"></div>
+    <div class="resize-handle resize-handle-bottom" id="resizeHandleBottom"></div>
+    <div class="resize-handle resize-handle-corner" id="resizeHandleCorner"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- 快捷键帮助 -->
+<div class="modal-overlay" id="helpModal">
+  <div class="modal">
+    <h2>⌨️ 快捷键</h2>
+    <div class="shortcut-row"><span>复制代码</span><kbd>Ctrl+Shift+C</kbd></div>
+    <div class="shortcut-row"><span>查找替换</span><kbd>Ctrl+F</kbd></div>
+    <div class="shortcut-row"><span>跳转到行</span><kbd>Ctrl+G</kbd></div>
+    <div class="shortcut-row"><span>注释</span><kbd>Ctrl+/</kbd></div>
+    <div class="shortcut-row"><span>放大/缩小字体</span><kbd>Ctrl+ +/-</kbd></div>
+    <div class="shortcut-row"><span>切换主题</span><kbd>Ctrl+T</kbd></div>
+    <button class="btn btn-primary close-btn" id="btnCloseHelp">关闭</button>
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept=".js,.ts,.jsx,.html,.css,.py,.txt,.json,.md,.xml" style="display:none">
+
+<script>
+(function() {
+  // ==================== 全局状态集中管理 ====================
+  const EditorState = {
+    currentLanguage: 'js',
+    codeModified: false,
+    originalCode: '',
+    searchMatchIndex: -1,
+    lastSearchMatches: [],
+    currentFontSize: 14,
+    wordWrapEnabled: false,
+    indentSize: 4,
+    indentCharacter: ' ',
+    theme: 'dark',
+    highlightEnabled: true,
+    userForcedHighlight: false,
+    largeFileThreshold: 5000,
+    autoSaveTimer: null,
+    updateTimer: null,
+    toastTimer: null,
+    copyRestoreTimer: null,
+    isDragging: false,
+    dragOffsetX: 0,
+    dragOffsetY: 0,
+    isResizing: false,
+    resizeDirection: null,
+    resizeStartX: 0,
+    resizeStartY: 0,
+    startWidth: 0,
+    startHeight: 0,
+    startLeft: 0,
+    startTop: 0,
+    lastFocusedElement: null,
+    autoSaveDB: null,
+    highlightWorker: null,
+    highlightShadowRoot: null,
+    highlightPreElement: null,
+    // Worker 高亮相关
+    pendingHighlightRequestId: 0,
+    lastSentHighlightCode: '',
+    isHighlightWorkerBusy: false,
+    // 导入大文件时的loading标志
+    isLoadingFile: false
+  };
+
+  // ==================== DOM 元素引用（完整） ====================
+  const codeEditor = document.getElementById('codeEditor');
+  const lineNumbers = document.getElementById('lineNumbers');
+  const highlightHost = document.getElementById('highlightHost');
+  const btnCopy = document.getElementById('btnCopy');
+  const btnUndo = document.getElementById('btnUndo');
+  const btnRedo = document.getElementById('btnRedo');
+  const btnClear = document.getElementById('btnClear');
+  const btnSelectAll = document.getElementById('btnSelectAll');
+  const btnToggleReplace = document.getElementById('btnToggleReplace');
+  const btnFindNext = document.getElementById('btnFindNext');
+  const btnReplaceOne = document.getElementById('btnReplaceOne');
+  const btnReplaceAll = document.getElementById('btnReplaceAll');
+  const replaceModalOverlay = document.getElementById('replaceModalOverlay');
+  const replaceModal = document.getElementById('replaceModal');
+  const replaceModalHeader = document.getElementById('replaceModalHeader');
+  const replaceModalClose = document.getElementById('replaceModalClose');
+  const replaceFind = document.getElementById('replaceFind');
+  const replaceWith = document.getElementById('replaceWith');
+  const replaceCaseSensitive = document.getElementById('replaceCaseSensitive');
+  const replaceWholeWord = document.getElementById('replaceWholeWord');
+  const replaceUseRegex = document.getElementById('replaceUseRegex');
+  const matchCountEl = document.getElementById('matchCount');
+  const copyIcon = document.getElementById('copyIcon');
+  const checkIcon = document.getElementById('checkIcon');
+  const copyText = document.getElementById('copyText');
+  const toast = document.getElementById('toast');
+  const lineCountEl = document.getElementById('lineCount');
+  const charCountEl = document.getElementById('charCount');
+  const cursorPosEl = document.getElementById('cursorPos');
+  const langDisplay = document.getElementById('langDisplay');
+  const langLabels = document.querySelectorAll('.lang-label');
+  const editorWrapper = document.getElementById('editorWrapper');
+  const btnTheme = document.getElementById('btnTheme');
+  const btnHelp = document.getElementById('btnHelp');
+  const helpModal = document.getElementById('helpModal');
+  const btnCloseHelp = document.getElementById('btnCloseHelp');
+  const fileInput = document.getElementById('fileInput');
+  const btnImport = document.getElementById('btnImport');
+  const btnDownload = document.getElementById('btnDownload');
+  const btnChangeSaveDir = document.getElementById('btnChangeSaveDir');
+  const btnWrap = document.getElementById('btnWrap');
+  const modifiedDot = document.getElementById('modifiedDot');
+  const indentIndicator = document.getElementById('indentIndicator');
+  const resizeHandleRight = document.getElementById('resizeHandleRight');
+  const resizeHandleBottom = document.getElementById('resizeHandleBottom');
+  const resizeHandleCorner = document.getElementById('resizeHandleCorner');
+  const autoSaveStatus = document.getElementById('autoSaveStatus');
+  const largeFileWarning = document.getElementById('largeFileWarning');
+  const btnEnableHighlight = document.getElementById('btnEnableHighlight');
+  const btnDisableHighlight = document.getElementById('btnDisableHighlight');
+
+  // ==================== 常量定义 ====================
+  const STORAGE_KEYS = {
+    CODE_CACHE: 'editor-code-cache-v6',
+    THEME: 'editor-theme-v6',
+    INDENT: 'editor-indent-v6',
+    FONT_SIZE: 'editor-font-size-v6',
+    LANGUAGE: 'editor-language-v6',
+    WRAP_ENABLED: 'editor-wrap-enabled-v6',
+    REPLACE_FIND: 'editor-replace-find-v6',
+    REPLACE_WITH: 'editor-replace-with-v6',
+    REPLACE_CASE_SENSITIVE: 'editor-replace-case-sensitive-v6',
+    REPLACE_WHOLE_WORD: 'editor-replace-whole-word-v6',
+    REPLACE_USE_REGEX: 'editor-replace-use-regex-v6',
+    REPLACE_MODAL_POSITION: 'editor-replace-modal-position-v6',
+    REPLACE_MODAL_SIZE: 'editor-replace-modal-size-v6',
+    HIGHLIGHT_ENABLED: 'editor-highlight-enabled-v6'
+  };
+
+  const INDEXED_DB_NAME = 'editor-autosave-db';
+  const INDEXED_STORE_NAME = 'code-store';
+  const INDEXED_KEY = 'latest-code';
+  const INDEXED_DB_VERSION = 1;
+
+  const DIR_HANDLE_DB_NAME = 'code-editor-fs';
+  const DIR_HANDLE_STORE_NAME = 'handles';
+  const DIR_HANDLE_KEY = 'save-directory';
+
+  const languageDisplayNames = {
+    js: 'JavaScript',
+    html: 'HTML',
+    css: 'CSS',
+    python: 'Python'
+  };
+
+  const languageExtensions = {
+    js: 'js',
+    html: 'html',
+    css: 'css',
+    python: 'py'
+  };
+
+  const defaultCode = `// 🎉 欢迎使用在线代码编辑器！
+function fibonacci(n) {
+  if (n <= 1) return n;
+  const memo = [0, 1];
+  for (let i = 2; i <= n; i++) {
+    memo[i] = memo[i - 1] + memo[i - 2];
+  }
+  return memo[n];
+}
+console.log('Fibonacci(10) =', fibonacci(10));
+console.log('Fibonacci(20) =', fibonacci(20));`;
+
+  // ==================== 工具函数 ====================
+  function escapeHtml(text) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function escapeRegExp(string) {
+    return string.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+  }
+
+  function getIndentString() {
+    if (EditorState.indentCharacter === '\t') {
+      return '\t';
+    }
+    return ' '.repeat(EditorState.indentSize);
+  }
+
+  // 优化：使用 match 计数代替 split 减少内存分配
+  function getLineCount(text) {
+    if (!text) return 0;
+    const lineBreaks = text.match(/\n/g);
+    return lineBreaks ? lineBreaks.length + 1 : 1;
+  }
+
+  // ==================== localStorage 辅助存储 ====================
+  function saveToLocalStorage(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (storageError) {
+      // 静默失败
+    }
+  }
+
+  function loadFromLocalStorage(key, defaultValue) {
+    try {
+      const storedItem = localStorage.getItem(key);
+      if (storedItem !== null) {
+        return JSON.parse(storedItem);
+      }
+      return defaultValue;
+    } catch (parseError) {
+      return defaultValue;
+    }
+  }
+  // ==================== IndexedDB 主存储（突破 5MB 限制） ====================
+  function openAutoSaveDatabase() {
+    return new Promise(function(resolve, reject) {
+      const request = indexedDB.open(INDEXED_DB_NAME, INDEXED_DB_VERSION);
+      request.onupgradeneeded = function(event) {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains(INDEXED_STORE_NAME)) {
+          db.createObjectStore(INDEXED_STORE_NAME);
+        }
+      };
+      request.onsuccess = function(event) {
+        EditorState.autoSaveDB = event.target.result;
+        resolve(EditorState.autoSaveDB);
+      };
+      request.onerror = function(event) {
+        console.error('无法打开 IndexedDB 自动保存数据库:', event.target.error);
+        reject(event.target.error);
+      };
+    });
+  }
+
+  function saveCodeToIndexedDB(code) {
+    if (!EditorState.autoSaveDB) return Promise.reject('数据库未打开');
+    return new Promise(function(resolve, reject) {
+      const transaction = EditorState.autoSaveDB.transaction(INDEXED_STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(INDEXED_STORE_NAME);
+      const putRequest = store.put(code, INDEXED_KEY);
+      putRequest.onsuccess = function() { resolve(); };
+      putRequest.onerror = function(event) { reject(event.target.error); };
+    });
+  }
+
+  function loadCodeFromIndexedDB() {
+    if (!EditorState.autoSaveDB) return Promise.resolve(null);
+    return new Promise(function(resolve, reject) {
+      const transaction = EditorState.autoSaveDB.transaction(INDEXED_STORE_NAME, 'readonly');
+      const store = transaction.objectStore(INDEXED_STORE_NAME);
+      const getRequest = store.get(INDEXED_KEY);
+      getRequest.onsuccess = function() { resolve(getRequest.result || null); };
+      getRequest.onerror = function(event) { reject(event.target.error); };
+    });
+  }
+
+  // 自动保存逻辑（800ms 防抖）
+  function triggerAutoSave() {
+    if (EditorState.autoSaveTimer) {
+      clearTimeout(EditorState.autoSaveTimer);
+    }
+    EditorState.autoSaveTimer = setTimeout(async function() {
+      const currentCode = codeEditor.value;
+      try {
+        await saveCodeToIndexedDB(currentCode);
+        if (currentCode.length < 500000) {
+          saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, currentCode);
+        }
+        autoSaveStatus.textContent = '💾 已自动保存';
+        autoSaveStatus.style.color = 'var(--green)';
+        setTimeout(function() {
+          autoSaveStatus.textContent = '💾 自动保存';
+        }, 2000);
+      } catch (error) {
+        console.warn('自动保存到 IndexedDB 失败，尝试 localStorage', error);
+        try {
+          saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, currentCode);
+          autoSaveStatus.textContent = '💾 已保存(本地)';
+        } catch (localError) {
+          autoSaveStatus.textContent = '⚠️ 保存失败';
+          autoSaveStatus.style.color = 'var(--red)';
+        }
+      }
+      setOriginalCode(currentCode);
+      clearModifiedMark();
+    }, 800);
+  }
+
+  // 手动保存（Ctrl+S）
+  async function saveImmediately() {
+    const currentCode = codeEditor.value;
+    try {
+      await saveCodeToIndexedDB(currentCode);
+      if (currentCode.length < 500000) {
+        saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, currentCode);
+      }
+      setOriginalCode(currentCode);
+      showToast('✅ 已保存');
+    } catch (error) {
+      showToast('❌ 保存失败', true);
+    }
+  }
+
+  function markModified() {
+    if (!EditorState.codeModified) {
+      EditorState.codeModified = true;
+      modifiedDot.style.display = 'inline-block';
+    }
+  }
+
+  function clearModifiedMark() {
+    EditorState.codeModified = false;
+    modifiedDot.style.display = 'none';
+  }
+
+  function setOriginalCode(code) {
+    EditorState.originalCode = code;
+    clearModifiedMark();
+  }
+
+  // ==================== 代码加载（优先 IndexedDB，降级 localStorage，最后默认） ====================
+  async function loadSavedCode() {
+    try {
+      const indexedCode = await loadCodeFromIndexedDB();
+      if (indexedCode !== null && indexedCode !== undefined) {
+        if (indexedCode !== defaultCode) {
+          if (confirm('检测到上次未完成的编辑内容，是否恢复？')) {
+            loadFileContent(indexedCode, '恢复内容');
+            return true;
+          }
+        }
+      }
+    } catch (dbError) {
+      console.warn('IndexedDB 读取失败，降级到 localStorage', dbError);
+    }
+    const cachedCode = loadFromLocalStorage(STORAGE_KEYS.CODE_CACHE, null);
+    if (cachedCode && cachedCode !== defaultCode) {
+      if (confirm('检测到本地缓存的编辑内容，是否恢复？')) {
+        loadFileContent(cachedCode, '恢复内容');
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ==================== 内联 Web Worker（包含语法高亮完整逻辑 + 超时保护） ====================
+  function createHighlightWorker() {
+    const workerScriptContent = `
+      // Worker 内: 语法高亮核心函数（与主线程完全一致，无简写）
+      function escapeHtmlWorker(text) {
+        return text
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function escapeRegExpWorker(string) {
+        return string.replace(/[-\\/\\\\^$*+?.()|[\\]{}]/g, '\\\\$&');
+      }
+
+      function syntaxHighlightWorker(code, language) {
+        if (!code) return '';
+        var escaped = escapeHtmlWorker(code);
+        var stringPlaceholders = [];
+        var stringIndex = 0;
+
+        function protectStrings(text, patterns) {
+          for (var p = 0; p < patterns.length; p++) {
+            var regex = patterns[p].regex;
+            text = text.replace(regex, function(match) {
+              var placeholder = '%%STRING' + (stringIndex++) + '%%';
+              stringPlaceholders.push({ placeholder: placeholder, original: match, wrapper: patterns[p].wrapper });
+              return placeholder;
+            });
+          }
+          return text;
+        }
+
+        function restoreStrings(text) {
+          for (var i = 0; i < stringPlaceholders.length; i++) {
+            var item = stringPlaceholders[i];
+            var replacement = item.wrapper ? '<span class="' + item.wrapper + '">' + item.original + '</span>' : item.original;
+            text = text.split(item.placeholder).join(replacement);
+          }
+          return text;
+        }
+
+        if (language === 'js' || language === 'javascript') {
+          escaped = protectStrings(escaped, [
+            { regex: /("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`)/g, wrapper: 'str' }
+          ]);
+          escaped = escaped.replace(/\\/\\*[\\s\\S]*?\\*\\//g, function(m) { return '<span class="cmt">' + m + '</span>'; });
+          escaped = escaped.replace(/(\\/\\/.*)/g, '<span class="cmt">$1</span>');
+          escaped = escaped.replace(/\\b(function|const|let|var|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|import|export|from|async|await|try|catch|throw|typeof|instanceof|this|super|default|yield|of|in|static|get|set)\\b/g, '<span class="kw">$1</span>');
+          escaped = escaped.replace(/\\b(\\d+\\.?\\d*)\\b/g, '<span class="num">$1</span>');
+          escaped = escaped.replace(/\\b([a-zA-Z_$][\\w$]*)\\s*\\(/g, '<span class="fn">$1</span>(');
+          escaped = escaped.replace(/\\.([a-zA-Z_$][\\w$]*)/g, '.<span class="prop">$1</span>');
+          escaped = restoreStrings(escaped);
+        } else if (language === 'html') {
+          escaped = protectStrings(escaped, [
+            { regex: /=(".*?"|'.*?')/g, wrapper: 'str' }
+          ]);
+          escaped = escaped.replace(/&lt;!--[\\s\\S]*?--&gt;/g, '<span class="cmt">$&</span>');
+          escaped = escaped.replace(/(&lt;\\/?)([\\w-]+)([\\s\\S]*?)(\\/?&gt;)/g, function(m, openTag, tagName, attributes, closeTag) {
+            var processedAttributes = attributes.replace(/([\\w-]+)(=)(%%STRING\\d+%%)/g, '<span class="attr">$1</span>$2$3');
+            return openTag + '<span class="tag">' + tagName + '</span>' + processedAttributes + closeTag;
+          });
+          escaped = restoreStrings(escaped);
+        } else if (language === 'css') {
+          escaped = protectStrings(escaped, [
+            { regex: /:\\s*([^;{}]+)/g, wrapper: null }
+          ]);
+          escaped = escaped.replace(/([\\w-]+)\\s*:/g, '<span class="attr">$1</span>:');
+          escaped = restoreStrings(escaped);
+          escaped = escaped.replace(/:\\s*([^;{}]+)/g, function(m, val) {
+            var highlightedVal = val.replace(/(#[0-9a-fA-F]{3,8}|\\d+\\.?\\d*(\\w+|%)?)/g, '<span class="num">$1</span>');
+            return ': ' + highlightedVal;
+          });
+          escaped = escaped.replace(/\\/\\*[\\s\\S]*?\\*\\//g, '<span class="cmt">$&</span>');
+          escaped = escaped.replace(/([.#][\\w-]+)/g, '<span class="tag">$1</span>');
+        } else if (language === 'python') {
+          escaped = protectStrings(escaped, [
+            { regex: /("""[\\s\\S]*?"""|'''[\\s\\S]*?'''|"(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')/g, wrapper: 'str' }
+          ]);
+          escaped = escaped.replace(/(#.*)/g, '<span class="cmt">$1</span>');
+          escaped = escaped.replace(/\\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|pass|break|continue|yield|lambda|and|or|not|in|is|None|True|False|self|print|range|len|int|str|float|list|dict|set|tuple)\\b/g, '<span class="kw">$1</span>');
+          escaped = escaped.replace(/\\b(\\d+\\.?\\d*)\\b/g, '<span class="num">$1</span>');
+          escaped = escaped.replace(/def\\s+([a-zA-Z_]\\w*)/g, 'def <span class="fn">$1</span>');
+          escaped = escaped.replace(/(@[\\w.]+)/g, '<span class="tag">$1</span>');
+          escaped = restoreStrings(escaped);
+        }
+        return escaped;
+      }
+
+      // 搜索匹配函数（支持超时）
+      function buildSearchRegexWorker(searchTerm, caseSensitive, wholeWord, useRegex) {
+        if (!searchTerm) return null;
+        var pattern;
+        if (useRegex) {
+          try {
+            new RegExp(searchTerm);
+            pattern = searchTerm;
+          } catch (e) { return null; }
+        } else {
+          var escapedTerm = escapeRegExpWorker(searchTerm);
+          pattern = wholeWord ? '\\\\b' + escapedTerm + '\\\\b' : escapedTerm;
+        }
+        var flags = 'g' + (caseSensitive ? '' : 'i');
+        try { return new RegExp(pattern, flags); } catch (e) { return null; }
+      }
+
+      function getMatchRangesWorker(code, searchTerm, caseSensitive, wholeWord, useRegex, timeoutMs) {
+        return new Promise(function(resolve) {
+          var regex = buildSearchRegexWorker(searchTerm, caseSensitive, wholeWord, useRegex);
+          if (!regex) {
+            resolve([]);
+            return;
+          }
+          var matches = [];
+          var timeoutId = setTimeout(function() {
+            resolve(matches);
+          }, timeoutMs);
+          try {
+            var match;
+            while ((match = regex.exec(code)) !== null) {
+              matches.push({ start: match.index, end: match.index + match[0].length });
+              if (!regex.global) break;
+              if (matches.length > 10000) break; // 防止过多匹配
+            }
+            clearTimeout(timeoutId);
+            resolve(matches);
+          } catch (err) {
+            clearTimeout(timeoutId);
+            resolve([]);
+          }
+        });
+      }
+
+      self.onmessage = async function(event) {
+        var message = event.data;
+        if (message.type === 'highlight') {
+          var { code, language, requestId, extraRanges } = message;
+          var highlightedHtml = '';
+          try {
+            highlightedHtml = syntaxHighlightWorker(code, language);
+            // 如果有额外高亮区间（搜索匹配、括号匹配），进行二次包裹
+            if (extraRanges && extraRanges.length > 0) {
+              // 由于 highlightedHtml 已经是带 span 的 HTML，直接按字符索引插入包裹很困难。简单方案：重新基于原始 code 生成分段
+              // 但为了性能且避免破坏语法高亮内部结构，我们采用更稳健的方法：将原始 code 按区间分割，分别高亮后再拼接。
+              // 但这样会重复高亮。鉴于 extraRanges 数量通常很少（<10），可以接受重算。
+              // 更好的方法：让主线程在 worker 返回后再做简单包裹（因为 worker 返回的是完整 HTML，主线程只需操作 DOM 节点）
+              // 但为了简化且保持 worker 独立，我们选择将 extraRanges 信息返回给主线程，由主线程在渲染时应用。
+              // 因此这里不处理 extraRanges，只返回纯语法高亮 HTML。
+            }
+          } catch (err) {
+            highlightedHtml = escapeHtmlWorker(code);
+          }
+          self.postMessage({ type: 'highlightResult', html: highlightedHtml, requestId: requestId });
+        } else if (message.type === 'searchMatches') {
+          var { code, searchTerm, caseSensitive, wholeWord, useRegex, timeoutMs } = message;
+          var matches = await getMatchRangesWorker(code, searchTerm, caseSensitive, wholeWord, useRegex, timeoutMs || 150);
+          self.postMessage({ type: 'searchMatchesResult', matches: matches });
+        }
+      };
+    `;
+    const blob = new Blob([workerScriptContent], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(blob);
+    EditorState.highlightWorker = new Worker(workerUrl);
+    URL.revokeObjectURL(workerUrl);
+  }
+
+  // ==================== Shadow DOM 高亮层初始化（含 CSS 变量同步） ====================
+  function syncShadowCSSVariables() {
+    if (!EditorState.highlightShadowRoot) return;
+    const host = EditorState.highlightShadowRoot.host;
+    const rootStyle = getComputedStyle(document.documentElement);
+    const vars = [
+      '--hl-kw','--hl-str','--hl-num','--hl-cmt','--hl-fn','--hl-tag',
+      '--hl-attr','--hl-prop','--hl-op','--hl-punc',
+      '--hl-search-bg','--hl-bracket-bg','--text',
+      '--editor-font-size','--editor-line-height','--editor-font'
+    ];
+    vars.forEach(function(v) {
+      host.style.setProperty(v, rootStyle.getPropertyValue(v).trim());
+    });
+  }
+
+  function setupShadowHighlightLayer() {
+    const shadowRoot = highlightHost.attachShadow({ mode: 'open' });
+    EditorState.highlightShadowRoot = shadowRoot;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      :host {
+        display: block; width: 100%; height: 100%;
+        position: absolute; top: 0; left: 0;
+        overflow: hidden; pointer-events: none;
+      }
+      pre {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        margin: 0; padding: 12px 18px;
+        font-family: var(--editor-font, monospace);
+        font-size: var(--editor-font-size, 14px);
+        line-height: var(--editor-line-height, 1.7);
+        tab-size: 4; white-space: pre;
+        overflow-wrap: normal; word-wrap: normal;
+        overflow-x: auto; overflow-y: scroll;
+        color: var(--text, #cdd6f4);
+        background: transparent; border: none; outline: none;
+        letter-spacing: 0; box-sizing: border-box;
+      }
+      pre.wrap-enabled { white-space: pre-wrap; word-break: break-all; }
+      .kw { color: var(--hl-kw); }
+      .str { color: var(--hl-str); }
+      .num { color: var(--hl-num); }
+      .cmt { color: var(--hl-cmt); font-style: italic; }
+      .fn { color: var(--hl-fn); }
+      .tag { color: var(--hl-tag); }
+      .attr { color: var(--hl-attr); }
+      .prop { color: var(--hl-prop); }
+      .op { color: var(--hl-op); }
+      .punc { color: var(--hl-punc); }
+      .search-match {
+        background: var(--hl-search-bg);
+        border-radius: 2px; display: inline;
+      }
+      .bracket-match {
+        background: var(--hl-bracket-bg);
+        border-radius: 2px; display: inline;
+      }
+    `;
+    shadowRoot.appendChild(style);
+
+    const preElement = document.createElement('pre');
+    preElement.setAttribute('aria-hidden', 'true');
+    shadowRoot.appendChild(preElement);
+    EditorState.highlightPreElement = preElement;
+
+    syncShadowCSSVariables();
+  }
+
+  function updateShadowHighlight(highlightedHTML, wrapEnabled) {
+    if (!EditorState.highlightPreElement) return;
+    const pre = EditorState.highlightPreElement;
+    pre.innerHTML = highlightedHTML + '\n';
+    if (wrapEnabled) {
+      pre.classList.add('wrap-enabled');
+    } else {
+      pre.classList.remove('wrap-enabled');
+    }
+  }
+
+  function syncShadowScroll() {
+    if (EditorState.highlightPreElement) {
+      EditorState.highlightPreElement.scrollTop = codeEditor.scrollTop;
+      EditorState.highlightPreElement.scrollLeft = codeEditor.scrollLeft;
+    }
+  }
+
+  // ==================== 括号匹配（与之前相同） ====================
+  function findMatchingBracket(code, position) {
+    var character = code[position];
+    var bracketPairs = {
+      '(': ')',
+      ')': '(',
+      '[': ']',
+      ']': '[',
+      '{': '}',
+      '}': '{'
+    };
+    if (!bracketPairs[character]) {
+      return -1;
+    }
+    var isOpeningBracket = '([{'.indexOf(character) !== -1;
+    var targetCharacter = bracketPairs[character];
+    var nestingDepth = 0;
+    if (isOpeningBracket) {
+      for (var i = position + 1; i < code.length; i++) {
+        if (code[i] === character) {
+          nestingDepth++;
+        } else if (code[i] === targetCharacter) {
+          if (nestingDepth === 0) {
+            return i;
+          }
+          nestingDepth--;
+        }
+      }
+    } else {
+      for (var i = position - 1; i >= 0; i--) {
+        if (code[i] === character) {
+          nestingDepth++;
+        } else if (code[i] === targetCharacter) {
+          if (nestingDepth === 0) {
+            return i;
+          }
+          nestingDepth--;
+        }
+      }
+    }
+    return -1;
+  }
+
+  // ==================== 获取括号匹配区间 ====================
+  function getBracketMatchRanges(code, cursorPosition) {
+    var ranges = [];
+    if (cursorPosition > 0) {
+      var checkPosition = cursorPosition - 1;
+      if (code[checkPosition] && /[()\[\]{}]/.test(code[checkPosition])) {
+        var matchingPosition = findMatchingBracket(code, checkPosition);
+        if (matchingPosition !== -1) {
+          var rangeStart = Math.min(checkPosition, matchingPosition);
+          var rangeEnd = Math.max(checkPosition, matchingPosition) + 1;
+          ranges.push({ start: rangeStart, end: rangeEnd });
+        }
+      }
+    }
+    return ranges;
+  }
+
+  // ==================== 正则安全校验（防止 ReDoS） ====================
+  function isRegexSafe(pattern) {
+    if (pattern.length > 100) return false;
+    var dangerousPatterns = [
+      /\([^)]*[+*{]\d*,?\d*}[^)]*[+*{]/,
+      /\(\?:.?\*\).?\*/,
+      /\(\?[=!].*[+*{}]/,
+      /\([^)]+[+*][^)]+[+*]\)/,
+      /\([^)]+[+*]\)[+*{]/,
+      /\([^)]*\*[^)]*\)\*/,
+      /\([^)]+\+[^)]+\)\+/,
+      /\[\^?[^\]]*\][+*]{2,}/
+    ];
+    for (var i = 0; i < dangerousPatterns.length; i++) {
+      if (dangerousPatterns[i].test(pattern)) return false;
+    }
+    if ((pattern.match(/\(/g) || []).length > 10) return false;
+    if ((pattern.match(/\|/g) || []).length > 8) return false;
+    return true;
+  }
+
+  // ==================== 构建搜索正则表达式 ====================
+  function buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex) {
+    if (!searchTerm) {
+      return null;
+    }
+    var pattern;
+    if (useRegex) {
+      if (!isRegexSafe(searchTerm)) {
+        return null;
+      }
+      try {
+        new RegExp(searchTerm);
+        pattern = searchTerm;
+      } catch (e) {
+        return null;
+      }
+    } else {
+      var escapedTerm = escapeRegExp(searchTerm);
+      pattern = wholeWord ? '\\b' + escapedTerm + '\\b' : escapedTerm;
+    }
+    var flags = 'g' + (caseSensitive ? '' : 'i');
+    try {
+      return new RegExp(pattern, flags);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ==================== 获取匹配区间（异步通过 Worker，带超时） ====================
+  function getSearchMatchesAsync(code, searchTerm, caseSensitive, wholeWord, useRegex, callback) {
+    if (!EditorState.highlightWorker) {
+      // 降级：同步获取（但可能会阻塞，此处简单返回空）
+      callback([]);
+      return;
+    }
+    EditorState.highlightWorker.onmessage = function(event) {
+      if (event.data.type === 'searchMatchesResult') {
+        callback(event.data.matches);
+      }
+    };
+    EditorState.highlightWorker.postMessage({
+      type: 'searchMatches',
+      code: code,
+      searchTerm: searchTerm,
+      caseSensitive: caseSensitive,
+      wholeWord: wholeWord,
+      useRegex: useRegex,
+      timeoutMs: 150
+    });
+  }
+
+  // 同步版本（用于一些需要立即结果的场合，但会阻塞，谨慎使用）
+  function getMatchRangesSync(code, searchTerm, caseSensitive, wholeWord, useRegex) {
+    var searchRegex = buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex);
+    if (!searchRegex) {
+      return [];
+    }
+    var matchRanges = [];
+    var regexMatch;
+    while ((regexMatch = searchRegex.exec(code)) !== null) {
+      matchRanges.push({
+        start: regexMatch.index,
+        end: regexMatch.index + regexMatch[0].length
+      });
+      if (!searchRegex.global) {
+        break;
+      }
+    }
+    return matchRanges;
+  }
+
+  // ==================== 高亮调度（使用 Web Worker，完全异步） ====================
+  var highlightRequestId = 0;
+  var currentHighlightRequestId = 0;
+  var highlightScheduled = false;
+  var lastHighlightTime = 0;
+  var highlightTimer = null;
+
+  function scheduleHighlightUpdate() {
+    if (highlightTimer) {
+      clearTimeout(highlightTimer);
+      highlightTimer = null;
+    }
+    var now = performance.now();
+    var minInterval = 80;
+    var elapsed = now - lastHighlightTime;
+    var delay = elapsed < minInterval ? minInterval - elapsed : 0;
+    highlightTimer = setTimeout(function() {
+      performHighlightUpdate();
+      highlightTimer = null;
+    }, delay);
+  }
+
+  function performHighlightUpdate() {
+    lastHighlightTime = performance.now();
+    if (!EditorState.highlightEnabled) {
+      // 高亮关闭时直接显示转义文本
+      var escapedCode = escapeHtml(codeEditor.value);
+      updateShadowHighlight(escapedCode, EditorState.wordWrapEnabled);
+      syncShadowScroll();
+      return;
+    }
+    if (!EditorState.highlightWorker) {
+      // 降级：无 worker 时什么都不做（避免卡顿）
+      return;
+    }
+    var currentCode = codeEditor.value;
+    var currentLang = EditorState.currentLanguage;
+    var requestId = ++highlightRequestId;
+    currentHighlightRequestId = requestId;
+
+    // 计算当前需要额外高亮的区间（搜索匹配 + 括号匹配）
+    var extraRanges = [];
+    if (replaceModalOverlay.classList.contains('open') && replaceFind.value) {
+      var searchMatches = getMatchRangesSync(
+        currentCode,
+        replaceFind.value,
+        replaceCaseSensitive.checked,
+        replaceWholeWord.checked,
+        replaceUseRegex.checked
+      );
+      for (var i = 0; i < searchMatches.length; i++) {
+        extraRanges.push({
+          start: searchMatches[i].start,
+          end: searchMatches[i].end,
+          type: 'search'
+        });
+      }
+    }
+    var cursorPos = codeEditor.selectionStart;
+    var bracketRanges = getBracketMatchRanges(currentCode, cursorPos);
+    for (var j = 0; j < bracketRanges.length; j++) {
+      extraRanges.push({
+        start: bracketRanges[j].start,
+        end: bracketRanges[j].end,
+        type: 'bracket'
+      });
+    }
+
+    // 发送高亮请求到 Worker
+    EditorState.highlightWorker.onmessage = function(event) {
+      var data = event.data;
+      if (data.type === 'highlightResult' && data.requestId === currentHighlightRequestId) {
+        var finalHtml = data.html;
+        // 在 worker 返回的纯语法高亮 HTML 基础上，应用额外高亮（搜索匹配、括号匹配）
+        if (extraRanges.length > 0) {
+          finalHtml = applyExtraHighlightsToHtml(finalHtml, currentCode, extraRanges);
+        }
+        updateShadowHighlight(finalHtml, EditorState.wordWrapEnabled);
+        syncShadowScroll();
+      }
+    };
+    EditorState.highlightWorker.postMessage({
+      type: 'highlight',
+      code: currentCode,
+      language: currentLang,
+      requestId: requestId,
+      extraRanges: extraRanges
+    });
+  }
+
+  // 在 HTML 字符串中插入额外高亮 span（根据原始代码的字符位置）
+  // 由于 HTML 字符串已经对特殊字符进行了转义，且包含了语法高亮的 span 标签，我们不能简单按字符索引分割。
+  // 解决方案：基于原始代码进行分段高亮，然后再与语法高亮结合。
+  // 为了保持性能且不破坏语法高亮，我们采用更稳健的方法：将原始代码按区间分割成片段，
+  // 每个片段独立调用语法高亮函数，然后用额外高亮 span 包裹。但这样会重复计算语法高亮，效率较低。
+  // 鉴于额外高亮区间数量很少（通常 <10），可以接受。
+  // 为了保持代码清晰，这里实现一个辅助函数。
+  function applyExtraHighlightsToHtml(html, rawCode, ranges) {
+    if (!ranges || ranges.length === 0) return html;
+    // 对原始代码进行语法高亮，但按区间分割
+    var segments = [];
+    var lastIndex = 0;
+    // 对 ranges 按 start 排序
+    var sortedRanges = ranges.slice().sort(function(a, b) { return a.start - b.start; });
+    for (var i = 0; i < sortedRanges.length; i++) {
+      var range = sortedRanges[i];
+      if (range.start > lastIndex) {
+        segments.push({
+          text: rawCode.substring(lastIndex, range.start),
+          className: null
+        });
+      }
+      segments.push({
+        text: rawCode.substring(range.start, range.end),
+        className: range.type === 'search' ? 'search-match' : 'bracket-match'
+      });
+      lastIndex = range.end;
+    }
+    if (lastIndex < rawCode.length) {
+      segments.push({
+        text: rawCode.substring(lastIndex),
+        className: null
+      });
+    }
+    // 对每个片段独立进行语法高亮，并包裹 className
+    var resultHtml = '';
+    for (var j = 0; j < segments.length; j++) {
+      var seg = segments[j];
+      var highlightedSeg = syntaxHighlightMainThread(seg.text, EditorState.currentLanguage);
+      if (seg.className) {
+        resultHtml += '<span class="' + seg.className + '">' + highlightedSeg + '</span>';
+      } else {
+        resultHtml += highlightedSeg;
+      }
+    }
+    return resultHtml;
+  }
+
+  // 注意：上面的 applyExtraHighlightsToHtml 引用了 syntaxHighlightMainThread，但该函数在主线程中已定义。
+  // 由于主线程中我们保留了 syntaxHighlightMainThread 函数（用于降级），可以直接使用。
+  // 但为了完整，我们将在后面定义该函数。此处先预留。
+  // ==================== 主线程语法高亮（同步，用于降级和片段高亮，与 Worker 内逻辑完全一致） ====================
+  function syntaxHighlightMainThread(code, language) {
+    if (!code) return '';
+    var escaped = escapeHtml(code);
+    var stringPlaceholders = [];
+    var stringIndex = 0;
+
+    function protectStrings(text, patterns) {
+      for (var p = 0; p < patterns.length; p++) {
+        var regex = patterns[p].regex;
+        text = text.replace(regex, function(match) {
+          var placeholder = '%%STRING' + (stringIndex++) + '%%';
+          stringPlaceholders.push({ placeholder: placeholder, original: match, wrapper: patterns[p].wrapper });
+          return placeholder;
+        });
+      }
+      return text;
+    }
+
+    function restoreStrings(text) {
+      for (var i = 0; i < stringPlaceholders.length; i++) {
+        var item = stringPlaceholders[i];
+        var replacement = item.wrapper ? '<span class="' + item.wrapper + '">' + item.original + '</span>' : item.original;
+        text = text.split(item.placeholder).join(replacement);
+      }
+      return text;
+    }
+
+    if (language === 'js' || language === 'javascript') {
+      escaped = protectStrings(escaped, [
+        { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, wrapper: 'str' }
+      ]);
+      escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, function(m) { return '<span class="cmt">' + m + '</span>'; });
+      escaped = escaped.replace(/(\/\/.*)/g, '<span class="cmt">$1</span>');
+      escaped = escaped.replace(/\b(function|const|let|var|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|import|export|from|async|await|try|catch|throw|typeof|instanceof|this|super|default|yield|of|in|static|get|set)\b/g, '<span class="kw">$1</span>');
+      escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
+      escaped = escaped.replace(/\b([a-zA-Z_$][\w$]*)\s*\(/g, '<span class="fn">$1</span>(');
+      escaped = escaped.replace(/\.([a-zA-Z_$][\w$]*)/g, '.<span class="prop">$1</span>');
+      escaped = restoreStrings(escaped);
+    } else if (language === 'html') {
+      escaped = protectStrings(escaped, [
+        { regex: /=(".*?"|'.*?')/g, wrapper: 'str' }
+      ]);
+      escaped = escaped.replace(/&lt;!--[\s\S]*?--&gt;/g, '<span class="cmt">$&</span>');
+      escaped = escaped.replace(/(&lt;\/?)([\w-]+)([\s\S]*?)(\/?&gt;)/g, function(m, openTag, tagName, attributes, closeTag) {
+        var processedAttributes = attributes.replace(/([\w-]+)(=)(%%STRING\d+%%)/g, '<span class="attr">$1</span>$2$3');
+        return openTag + '<span class="tag">' + tagName + '</span>' + processedAttributes + closeTag;
+      });
+      escaped = restoreStrings(escaped);
+    } else if (language === 'css') {
+      escaped = protectStrings(escaped, [
+        { regex: /:\s*([^;{}]+)/g, wrapper: null }
+      ]);
+      escaped = escaped.replace(/([\w-]+)\s*:/g, '<span class="attr">$1</span>:');
+      escaped = restoreStrings(escaped);
+      escaped = escaped.replace(/:\s*([^;{}]+)/g, function(m, val) {
+        var highlightedVal = val.replace(/(#[0-9a-fA-F]{3,8}|\d+\.?\d*(\w+|%)?)/g, '<span class="num">$1</span>');
+        return ': ' + highlightedVal;
+      });
+      escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, '<span class="cmt">$&</span>');
+      escaped = escaped.replace(/([.#][\w-]+)/g, '<span class="tag">$1</span>');
+    } else if (language === 'python') {
+      escaped = protectStrings(escaped, [
+        { regex: /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, wrapper: 'str' }
+      ]);
+      escaped = escaped.replace(/(#.*)/g, '<span class="cmt">$1</span>');
+      escaped = escaped.replace(/\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|pass|break|continue|yield|lambda|and|or|not|in|is|None|True|False|self|print|range|len|int|str|float|list|dict|set|tuple)\b/g, '<span class="kw">$1</span>');
+      escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
+      escaped = escaped.replace(/def\s+([a-zA-Z_]\w*)/g, 'def <span class="fn">$1</span>');
+      escaped = escaped.replace(/(@[\w.]+)/g, '<span class="tag">$1</span>');
+      escaped = restoreStrings(escaped);
+    }
+    return escaped;
+  }
+
+  // ==================== 行号更新（虚拟滚动） ====================
+  var lineHeightCache = 0;
+  var lastFontSizeForCache = 0;
+
+  function updateLineCounts() {
+    var codeText = codeEditor.value;
+    var totalLines = getLineCount(codeText);
+    lineCountEl.textContent = '行: ' + totalLines;
+    charCountEl.textContent = '字符: ' + codeText.length;
+
+    if (totalLines > EditorState.largeFileThreshold && EditorState.highlightEnabled && !EditorState.userForcedHighlight) {
+      setHighlightEnabled(false);
+      largeFileWarning.style.display = 'block';
+      btnEnableHighlight.style.display = 'inline-block';
+      btnDisableHighlight.style.display = 'none';
+      showToast('⚠️ 文件较大，已自动关闭实时高亮以保证流畅', true);
+    }
+  }
+
+  function updateLineNumbers() {
+    var codeText = codeEditor.value;
+    var totalLines = getLineCount(codeText);
+
+    if (lineHeightCache === 0 || EditorState.currentFontSize !== lastFontSizeForCache) {
+      var testSpan = document.createElement('span');
+      testSpan.textContent = '0';
+      testSpan.style.fontFamily = 'var(--editor-font)';
+      testSpan.style.fontSize = EditorState.currentFontSize + 'px';
+      testSpan.style.lineHeight = getComputedStyle(document.documentElement).getPropertyValue('--editor-line-height').trim() || '1.7';
+      document.body.appendChild(testSpan);
+      lineHeightCache = testSpan.getBoundingClientRect().height;
+      document.body.removeChild(testSpan);
+      lastFontSizeForCache = EditorState.currentFontSize;
+    }
+
+    var scrollTop = codeEditor.scrollTop;
+    var clientHeight = codeEditor.clientHeight;
+    var startLine = Math.floor(scrollTop / lineHeightCache) + 1;
+    var endLine = Math.min(totalLines, Math.ceil((scrollTop + clientHeight) / lineHeightCache) + 1);
+
+    var lineNumbersHtml = '';
+    if (startLine > 1) {
+      lineNumbersHtml += '<span style="height:' + ((startLine - 1) * lineHeightCache) + 'px;display:block;"></span>';
+    }
+    for (var lineIndex = startLine; lineIndex <= endLine; lineIndex++) {
+      lineNumbersHtml += '<span>' + lineIndex + '</span>\n';
+    }
+    if (endLine < totalLines) {
+      lineNumbersHtml += '<span style="height:' + ((totalLines - endLine) * lineHeightCache) + 'px;display:block;"></span>';
+    }
+    lineNumbers.innerHTML = lineNumbersHtml;
+  }
+
+  function updateCursorPosition() {
+    var selectionStart = codeEditor.selectionStart;
+    var selectionEnd = codeEditor.selectionEnd;
+    var codeText = codeEditor.value;
+    if (selectionStart !== selectionEnd) {
+      var selectedText = codeText.substring(selectionStart, selectionEnd);
+      var selectedLineCount = getLineCount(selectedText);
+      cursorPosEl.textContent = '选中: ' + selectedText.length + ' 字符 / ' + selectedLineCount + ' 行';
+    } else {
+      var textBeforeCursor = codeText.substring(0, selectionStart);
+      var linesBeforeCursor = textBeforeCursor.split('\n');
+      var currentRow = linesBeforeCursor.length;
+      var currentColumn = linesBeforeCursor[linesBeforeCursor.length - 1].length + 1;
+      cursorPosEl.textContent = '行:' + currentRow + ' 列:' + currentColumn;
+    }
+  }
+
+  // ==================== 滚动同步 ====================
+  function syncScroll() {
+    lineNumbers.scrollTop = codeEditor.scrollTop;
+    syncShadowScroll();
+  }
+
+  // ==================== 查找替换弹窗逻辑（增强：全部替换时自动降级高亮） ====================
+  function openReplaceModal() {
+    replaceModalOverlay.classList.add('open');
+    var savedPosition = loadFromLocalStorage(STORAGE_KEYS.REPLACE_MODAL_POSITION, null);
+    if (savedPosition && savedPosition.left !== undefined && savedPosition.top !== undefined) {
+      replaceModal.style.position = 'fixed';
+      replaceModal.style.left = savedPosition.left + 'px';
+      replaceModal.style.top = savedPosition.top + 'px';
+      replaceModal.style.margin = '0';
+    } else {
+      replaceModal.style.position = '';
+      replaceModal.style.left = '';
+      replaceModal.style.top = '';
+      replaceModal.style.margin = '';
+    }
+    var savedSize = loadFromLocalStorage(STORAGE_KEYS.REPLACE_MODAL_SIZE, null);
+    if (savedSize && savedSize.width && savedSize.height) {
+      replaceModal.style.width = savedSize.width + 'px';
+      replaceModal.style.height = savedSize.height + 'px';
+    } else {
+      replaceModal.style.width = '';
+      replaceModal.style.height = '';
+    }
+    replaceFind.focus();
+    updateMatchCount();
+  }
+
+  function closeReplaceModal() {
+    if (replaceModalOverlay.classList.contains('open')) {
+      var modalRect = replaceModal.getBoundingClientRect();
+      saveToLocalStorage(STORAGE_KEYS.REPLACE_MODAL_POSITION, {
+        left: modalRect.left,
+        top: modalRect.top
+      });
+      saveToLocalStorage(STORAGE_KEYS.REPLACE_MODAL_SIZE, {
+        width: modalRect.width,
+        height: modalRect.height
+      });
+    }
+    replaceModalOverlay.classList.remove('open');
+    EditorState.lastSearchMatches = [];
+    EditorState.searchMatchIndex = -1;
+    scheduleHighlightUpdate();
+  }
+
+  function toggleReplaceModal() {
+    if (replaceModalOverlay.classList.contains('open')) {
+      closeReplaceModal();
+    } else {
+      openReplaceModal();
+    }
+  }
+
+  function updateMatchCount() {
+    if (!replaceModalOverlay.classList.contains('open') || !replaceFind.value) {
+      matchCountEl.textContent = '';
+      return;
+    }
+    getSearchMatchesAsync(
+      codeEditor.value,
+      replaceFind.value,
+      replaceCaseSensitive.checked,
+      replaceWholeWord.checked,
+      replaceUseRegex.checked,
+      function(matches) {
+        matchCountEl.textContent = matches.length + ' 处匹配';
+      }
+    );
+  }
+
+  function findNext() {
+    var foundMatches = getMatchRangesSync(
+      codeEditor.value,
+      replaceFind.value,
+      replaceCaseSensitive.checked,
+      replaceWholeWord.checked,
+      replaceUseRegex.checked
+    );
+    if (foundMatches.length === 0) {
+      var regex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
+      if (!regex && replaceFind.value && replaceUseRegex.checked) {
+        showToast('⚠️ 正则表达式存在性能风险，请简化', true);
+      } else {
+        showToast('未找到匹配项', true);
+      }
+      return;
+    }
+    EditorState.lastSearchMatches = foundMatches;
+    var currentSelectionStart = codeEditor.selectionStart;
+    var nextMatchIndex = foundMatches.findIndex(function(match) {
+      return match.start > currentSelectionStart;
+    });
+    if (nextMatchIndex === -1) {
+      nextMatchIndex = 0;
+    }
+    EditorState.searchMatchIndex = nextMatchIndex;
+    var targetMatch = foundMatches[nextMatchIndex];
+    codeEditor.focus();
+    codeEditor.setSelectionRange(targetMatch.start, targetMatch.end);
+    var textBeforeMatch = codeEditor.value.substring(0, targetMatch.start);
+    var targetLineNumber = getLineCount(textBeforeMatch);
+    var totalLines = getLineCount(codeEditor.value);
+    var estimatedLineHeight = codeEditor.scrollHeight / totalLines;
+    var scrollTarget = (targetLineNumber - 1) * estimatedLineHeight - codeEditor.clientHeight / 3;
+    codeEditor.scrollTop = Math.max(0, scrollTarget);
+    updateCursorPosition();
+    showToast('匹配 ' + (nextMatchIndex + 1) + '/' + foundMatches.length);
+  }
+
+  function replaceOne() {
+    var foundMatches = getMatchRangesSync(
+      codeEditor.value,
+      replaceFind.value,
+      replaceCaseSensitive.checked,
+      replaceWholeWord.checked,
+      replaceUseRegex.checked
+    );
+    if (foundMatches.length === 0) {
+      var regex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
+      if (!regex && replaceFind.value && replaceUseRegex.checked) {
+        showToast('⚠️ 正则表达式存在性能风险，请简化', true);
+      } else {
+        showToast('未找到匹配项', true);
+      }
+      return;
+    }
+    EditorState.lastSearchMatches = foundMatches;
+    var currentSelectionStart = codeEditor.selectionStart;
+    var currentSelectionEnd = codeEditor.selectionEnd;
+    var currentMatchIndex = foundMatches.findIndex(function(match) {
+      return match.start === currentSelectionStart && match.end === currentSelectionEnd;
+    });
+    if (currentMatchIndex === -1) {
+      findNext();
+      return;
+    }
+    var targetMatch = foundMatches[currentMatchIndex];
+    var replacementText = replaceWith.value;
+    codeEditor.focus();
+    codeEditor.setSelectionRange(targetMatch.start, targetMatch.end);
+    if (document.queryCommandSupported('insertText')) {
+      document.execCommand('insertText', false, replacementText);
+    } else {
+      var currentCode = codeEditor.value;
+      codeEditor.value = currentCode.substring(0, targetMatch.start) + replacementText + currentCode.substring(targetMatch.end);
+    }
+    fullUpdate();
+    var newMatches = getMatchRangesSync(
+      codeEditor.value,
+      replaceFind.value,
+      replaceCaseSensitive.checked,
+      replaceWholeWord.checked,
+      replaceUseRegex.checked
+    );
+    EditorState.lastSearchMatches = newMatches;
+    if (newMatches.length > 0) {
+      var nextMatchIndex = newMatches.findIndex(function(match) {
+        return match.start >= targetMatch.start;
+      });
+      if (nextMatchIndex !== -1) {
+        var nextMatch = newMatches[nextMatchIndex];
+        codeEditor.setSelectionRange(nextMatch.start, nextMatch.end);
+        EditorState.searchMatchIndex = nextMatchIndex;
+      }
+    }
+  }
+
+  function replaceAll() {
+    // 大文件优化：如果文件行数超过阈值且高亮开启，临时关闭高亮，操作后恢复
+    var totalLines = getLineCount(codeEditor.value);
+    var wasHighlightEnabled = EditorState.highlightEnabled;
+    var shouldTempDisableHighlight = (totalLines > EditorState.largeFileThreshold && wasHighlightEnabled);
+    if (shouldTempDisableHighlight) {
+      setHighlightEnabled(false);
+      showToast('文件较大，已临时关闭高亮以保证替换流畅，操作后可手动重新开启', false);
+    }
+
+    var searchRegex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
+    if (!searchRegex) {
+      if (replaceUseRegex.checked && replaceFind.value) {
+        showToast('⚠️ 正则表达式存在性能风险，请简化', true);
+      } else {
+        showToast('请输入有效的查找内容', true);
+      }
+      if (shouldTempDisableHighlight) setHighlightEnabled(true);
+      return;
+    }
+    var currentCode = codeEditor.value;
+    var matchedItems = currentCode.match(searchRegex);
+    if (!matchedItems) {
+      showToast('未找到匹配项', true);
+      if (shouldTempDisableHighlight) setHighlightEnabled(true);
+      return;
+    }
+    var totalMatches = matchedItems.length;
+    if (!confirm('确定要替换全部 ' + totalMatches + ' 处匹配吗？')) {
+      if (shouldTempDisableHighlight) setHighlightEnabled(true);
+      return;
+    }
+    codeEditor.value = currentCode.replace(searchRegex, replaceWith.value);
+    fullUpdate();
+    showToast('✅ 已替换 ' + totalMatches + ' 处匹配');
+    EditorState.lastSearchMatches = [];
+    EditorState.searchMatchIndex = -1;
+    // 恢复高亮状态
+    if (shouldTempDisableHighlight) {
+      setHighlightEnabled(true);
+      showToast('已恢复高亮', false);
+    }
+  }
+
+  // ==================== 查找替换输入持久化 ====================
+  function persistReplaceInputs() {
+    saveToLocalStorage(STORAGE_KEYS.REPLACE_FIND, replaceFind.value);
+    saveToLocalStorage(STORAGE_KEYS.REPLACE_WITH, replaceWith.value);
+    saveToLocalStorage(STORAGE_KEYS.REPLACE_CASE_SENSITIVE, replaceCaseSensitive.checked);
+    saveToLocalStorage(STORAGE_KEYS.REPLACE_WHOLE_WORD, replaceWholeWord.checked);
+    saveToLocalStorage(STORAGE_KEYS.REPLACE_USE_REGEX, replaceUseRegex.checked);
+  }
+
+  function restoreReplaceInputs() {
+    replaceFind.value = loadFromLocalStorage(STORAGE_KEYS.REPLACE_FIND, '');
+    replaceWith.value = loadFromLocalStorage(STORAGE_KEYS.REPLACE_WITH, '');
+    replaceCaseSensitive.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_CASE_SENSITIVE, false);
+    replaceWholeWord.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_WHOLE_WORD, false);
+    replaceUseRegex.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_USE_REGEX, false);
+  }
+
+  replaceFind.addEventListener('input', function() {
+    updateMatchCount();
+    persistReplaceInputs();
+    scheduleHighlightUpdate();
+  });
+  replaceWith.addEventListener('input', persistReplaceInputs);
+  replaceCaseSensitive.addEventListener('change', function() {
+    updateMatchCount();
+    persistReplaceInputs();
+    scheduleHighlightUpdate();
+  });
+  replaceWholeWord.addEventListener('change', function() {
+    updateMatchCount();
+    persistReplaceInputs();
+    scheduleHighlightUpdate();
+  });
+  replaceUseRegex.addEventListener('change', function() {
+    updateMatchCount();
+    persistReplaceInputs();
+    scheduleHighlightUpdate();
+  });
+
+  replaceModal.addEventListener('keydown', function(event) {
+    if (event.key === 'Enter' && (event.target === replaceFind || event.target === replaceWith) && !event.shiftKey) {
+      event.preventDefault();
+      findNext();
+    }
+  });
+
+  // ==================== 智能编辑上下文判断 ====================
+  function isInsideStringOrComment(code, position) {
+    var inSingleQuote = false;
+    var inDoubleQuote = false;
+    var inBacktick = false;
+    var inLineComment = false;
+    var inBlockComment = false;
+    for (var i = 0; i < position; i++) {
+      var character = code[i];
+      if (inLineComment) {
+        if (character === '\n') { inLineComment = false; }
+        continue;
+      }
+      if (inBlockComment) {
+        if (character === '*' && code[i + 1] === '/') { inBlockComment = false; i++; }
+        continue;
+      }
+      if (inSingleQuote && character === '\\') { i++; continue; }
+      if (inDoubleQuote && character === '\\') { i++; continue; }
+      if (inBacktick && character === '\\') { i++; continue; }
+      if (character === "'" && !inDoubleQuote && !inBacktick) { inSingleQuote = !inSingleQuote; }
+      else if (character === '"' && !inSingleQuote && !inBacktick) { inDoubleQuote = !inDoubleQuote; }
+      else if (character === '`' && !inSingleQuote && !inDoubleQuote) { inBacktick = !inBacktick; }
+      else if (!inSingleQuote && !inDoubleQuote && !inBacktick && character === '/' && code[i + 1] === '/') { inLineComment = true; i++; }
+      else if (!inSingleQuote && !inDoubleQuote && !inBacktick && character === '/' && code[i + 1] === '*') { inBlockComment = true; i++; }
+    }
+    return inSingleQuote || inDoubleQuote || inBacktick || inLineComment || inBlockComment;
+  }
+
+  // ==================== 键盘编辑事件（完整保留原逻辑） ====================
+  codeEditor.addEventListener('keydown', function(event) {
+    var openingPairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
+    var closingPairs = { ')': '(', ']': '[', '}': '{' };
+    var pressedKey = event.key;
+    var selectionStart = this.selectionStart;
+    var selectionEnd = this.selectionEnd;
+    var editorValue = this.value;
+
+    if (pressedKey in closingPairs && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      if (selectionStart === selectionEnd && editorValue[selectionStart] === pressedKey) {
+        event.preventDefault();
+        this.selectionStart = this.selectionEnd = selectionStart + 1;
+        updateCursorPosition();
+        return;
+      }
+    }
+
+    if (pressedKey in openingPairs && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      if (selectionStart !== selectionEnd) {
+        event.preventDefault();
+        var selectedText = editorValue.substring(selectionStart, selectionEnd);
+        var replacement = pressedKey + selectedText + openingPairs[pressedKey];
+        this.setRangeText(replacement, selectionStart, selectionEnd, 'select');
+        this.selectionStart = selectionStart + 1;
+        this.selectionEnd = selectionStart + 1 + selectedText.length;
+        fullUpdate();
+        return;
+      }
+      if (isInsideStringOrComment(editorValue, selectionStart)) return;
+      var nextCharacter = editorValue[selectionStart];
+      if (nextCharacter === '' || /[\s}\]\)]/.test(nextCharacter)) {
+        event.preventDefault();
+        this.setRangeText(pressedKey + openingPairs[pressedKey], selectionStart, selectionStart, 'start');
+        this.selectionStart = this.selectionEnd = selectionStart + 1;
+        fullUpdate();
+      }
+      return;
+    }
+
+    if (pressedKey === 'Enter') {
+      event.preventDefault();
+      var textBeforeCursor = editorValue.substring(0, selectionStart);
+      var textAfterCursor = editorValue.substring(selectionEnd);
+      var currentLineStart = editorValue.lastIndexOf('\n', selectionStart - 1) + 1;
+      var currentLine = editorValue.substring(currentLineStart, selectionStart);
+      var currentIndent = currentLine.match(/^[ \t]*/)[0];
+      var trimmedLine = currentLine.trimEnd();
+      var extraIndent = '';
+      if (!isInsideStringOrComment(editorValue, selectionStart)) {
+        if (trimmedLine.endsWith('{') || trimmedLine.endsWith('(') || trimmedLine.endsWith('[') ||
+            (EditorState.currentLanguage === 'python' && trimmedLine.endsWith(':'))) {
+          extraIndent = getIndentString();
+        }
+      }
+      var insertedText = '\n' + currentIndent + extraIndent;
+      this.value = textBeforeCursor + insertedText + textAfterCursor;
+      this.selectionStart = this.selectionEnd = selectionStart + insertedText.length;
+      fullUpdate();
+      return;
+    }
+
+    if (pressedKey in closingPairs && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      var lineStart = editorValue.lastIndexOf('\n', selectionStart - 1) + 1;
+      var lineContent = editorValue.substring(lineStart, selectionStart);
+      if (lineContent.trim() === '') {
+        event.preventDefault();
+        var currentLineIndent = lineContent.match(/^[ \t]*/)[0];
+        var removeLength = (EditorState.indentCharacter === '\t') ? 1 : EditorState.indentSize;
+        var newIndent = currentLineIndent.length >= removeLength ? currentLineIndent.substring(removeLength) : '';
+        this.setRangeText(newIndent + pressedKey, lineStart, selectionStart, 'end');
+        fullUpdate();
+        return;
+      }
+    }
+
+    if (pressedKey === 'Tab' && !event.shiftKey) {
+      event.preventDefault();
+      var indentStr = getIndentString();
+      if (selectionStart !== selectionEnd) {
+        var textBeforeSelection = editorValue.substring(0, selectionStart);
+        var selectedText = editorValue.substring(selectionStart, selectionEnd);
+        var textAfterSelection = editorValue.substring(selectionEnd);
+        var selectedLines = selectedText.split('\n');
+        var indentedLines = selectedLines.map(function(line) { return indentStr + line; }).join('\n');
+        this.value = textBeforeSelection + indentedLines + textAfterSelection;
+        this.selectionStart = selectionStart;
+        this.selectionEnd = selectionStart + indentedLines.length;
+      } else {
+        this.setRangeText(indentStr, selectionStart, selectionStart, 'end');
+      }
+      fullUpdate();
+      return;
+    }
+
+    if (pressedKey === 'Tab' && event.shiftKey) {
+      event.preventDefault();
+      if (selectionStart !== selectionEnd) {
+        var textBeforeSelection = editorValue.substring(0, selectionStart);
+        var selectedText = editorValue.substring(selectionStart, selectionEnd);
+        var textAfterSelection = editorValue.substring(selectionEnd);
+        var selectedLines = selectedText.split('\n');
+        var removePattern = (EditorState.indentCharacter === '\t') ? '\t' : ' {1,' + EditorState.indentSize + '}';
+        var dedentedLines = selectedLines.map(function(line) { return line.replace(new RegExp('^' + removePattern), ''); });
+        this.value = textBeforeSelection + dedentedLines.join('\n') + textAfterSelection;
+        this.selectionStart = selectionStart;
+        this.selectionEnd = selectionStart + dedentedLines.join('\n').length;
+      } else {
+        var lineStart = editorValue.lastIndexOf('\n', selectionStart - 1) + 1;
+        var lineContent = editorValue.substring(lineStart, selectionStart);
+        var removePattern = (EditorState.indentCharacter === '\t') ? '^\t' : '^ {1,' + EditorState.indentSize + '}';
+        var indentMatch = lineContent.match(new RegExp(removePattern));
+        if (indentMatch && selectionStart - lineStart <= indentMatch[0].length) {
+          this.value = editorValue.substring(0, lineStart) + lineContent.substring(indentMatch[0].length) + editorValue.substring(selectionStart);
+          this.selectionStart = this.selectionEnd = selectionStart - indentMatch[0].length;
+        }
+      }
+      fullUpdate();
+      return;
+    }
+  });
+
+  // 注释快捷键
+  codeEditor.addEventListener('keydown', function(event) {
+    if ((event.ctrlKey || event.metaKey) && event.key === '/') {
+      event.preventDefault();
+      var selectionStart = this.selectionStart;
+      var selectionEnd = this.selectionEnd;
+      var editorValue = this.value;
+      var textBeforeSelection = editorValue.substring(0, selectionStart);
+      var selectedText = editorValue.substring(selectionStart, selectionEnd);
+      var textAfterSelection = editorValue.substring(selectionEnd);
+
+      var commentCharacter = '//';
+      if (EditorState.currentLanguage === 'python') commentCharacter = '#';
+      else if (EditorState.currentLanguage === 'html') commentCharacter = '<!-- -->';
+      else if (EditorState.currentLanguage === 'css') commentCharacter = '/* */';
+
+      var newSelection;
+      if (EditorState.currentLanguage === 'html') {
+        var isCommented = selectedText.startsWith('<!--') && selectedText.endsWith('-->');
+        newSelection = isCommented ? selectedText.slice(5, -4) : '<!--' + selectedText + '-->';
+      } else if (EditorState.currentLanguage === 'css') {
+        var isCommented = selectedText.startsWith('/*') && selectedText.endsWith('*/');
+        newSelection = isCommented ? selectedText.slice(2, -2) : '/*' + selectedText + '*/';
+      } else {
+        var selectedLines = selectedText.split('\n');
+        var allLinesCommented = selectedLines.every(function(line) { return line.trimStart().startsWith(commentCharacter); });
+        if (allLinesCommented) {
+          newSelection = selectedLines.map(function(line) { return line.replace(new RegExp('^\\s*' + escapeRegExp(commentCharacter) + '\\s?'), ''); }).join('\n');
+        } else {
+          newSelection = selectedLines.map(function(line) { return commentCharacter + ' ' + line; }).join('\n');
+        }
+      }
+      this.value = textBeforeSelection + newSelection + textAfterSelection;
+      this.selectionStart = selectionStart;
+      this.selectionEnd = selectionStart + newSelection.length;
+      fullUpdate();
+    }
+  });
+
+  codeEditor.addEventListener('click', updateCursorPosition);
+  codeEditor.addEventListener('keyup', updateCursorPosition);
+  codeEditor.addEventListener('input', function() {
+    debouncedUpdate();
+    toggleClearButton();
+    triggerAutoSave();
+    if (replaceModalOverlay.classList.contains('open')) {
+      EditorState.lastSearchMatches = [];
+      EditorState.searchMatchIndex = -1;
+      updateMatchCount();
+    }
+  });
+
+  // 滚动事件（节流，并刷新行号）
+  var scrollTicking = false;
+  codeEditor.addEventListener('scroll', function() {
+    if (!scrollTicking) {
+      requestAnimationFrame(function() {
+        syncScroll();
+        updateLineNumbers();
+        scrollTicking = false;
+      });
+      scrollTicking = true;
+    }
+  });
+
+  codeEditor.addEventListener('paste', function(event) {
+    event.preventDefault();
+    var clipboardData = event.clipboardData || window.clipboardData;
+    var pastedText = clipboardData.getData('text/plain');
+    var start = this.selectionStart;
+    var end = this.selectionEnd;
+    this.setRangeText(pastedText, start, end, 'end');
+    fullUpdate();
+  });
+
+  // ==================== 文件导入（增加 Loading 提示） ====================
+  btnImport.addEventListener('click', function() {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', function(event) {
+    var selectedFile = event.target.files[0];
+    if (!selectedFile) return;
+    var validExtensions = /\.(js|ts|jsx|html|css|py|txt|json|md|xml)$/i;
+    var isValidTextFile = (selectedFile.type && selectedFile.type.startsWith('text/')) || validExtensions.test(selectedFile.name);
+    if (!isValidTextFile) {
+      showToast('⚠️ 仅支持文本文件', true);
+      fileInput.value = '';
+      return;
+    }
+    if (selectedFile.size > 2 * 1024 * 1024) {
+      var fileSizeMB = (selectedFile.size / (1024 * 1024)).toFixed(2);
+      if (!confirm('文件较大 (' + fileSizeMB + ' MB)，加载可能缓慢，是否继续？')) {
+        fileInput.value = '';
+        return;
+      }
+    }
+    var fileReader = new FileReader();
+    fileReader.onloadstart = function() {
+      EditorState.isLoadingFile = true;
+      showToast('📂 正在加载文件，请稍候...', false);
+    };
+    fileReader.onload = function(loadEvent) {
+      loadFileContent(loadEvent.target.result, selectedFile.name);
+      showToast('📂 已加载 ' + selectedFile.name);
+      EditorState.isLoadingFile = false;
+      fileInput.value = '';
+    };
+    fileReader.onerror = function() {
+      showToast('❌ 文件读取失败', true);
+      EditorState.isLoadingFile = false;
+    };
+    fileReader.readAsText(selectedFile);
+  });
+
+  function handleFileSelect(file) {
+    var validExtensions = /\.(js|ts|jsx|html|css|py|txt|json|md|xml)$/i;
+    var isValidTextFile = (file.type && file.type.startsWith('text/')) || validExtensions.test(file.name);
+    if (!isValidTextFile) {
+      showToast('⚠️ 仅支持文本文件', true);
+      return false;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      var fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      if (!confirm('文件较大 (' + fileSizeMB + ' MB)，加载可能缓慢，是否继续？')) {
+        return false;
+      }
+    }
+    var fileReader = new FileReader();
+    fileReader.onloadstart = function() {
+      EditorState.isLoadingFile = true;
+      showToast('📂 正在加载文件...', false);
+    };
+    fileReader.onload = function(loadEvent) {
+      loadFileContent(loadEvent.target.result, file.name);
+      showToast('📂 已加载 ' + file.name);
+      EditorState.isLoadingFile = false;
+    };
+    fileReader.onerror = function() {
+      showToast('❌ 文件读取失败', true);
+      EditorState.isLoadingFile = false;
+    };
+    fileReader.readAsText(file);
+    return true;
+  }
+
+  function setupDropTarget(element) {
+    element.addEventListener('dragover', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'copy';
+    });
+    element.addEventListener('drop', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      var droppedFile = event.dataTransfer.files[0];
+      if (!droppedFile) return;
+      handleFileSelect(droppedFile);
+    });
+  }
+  setupDropTarget(editorWrapper);
+  setupDropTarget(codeEditor);
+
+  // ==================== 下载功能（保持原样） ====================
+  function openDirectoryDB() {
+    return new Promise(function(resolve, reject) {
+      var request = indexedDB.open(DIR_HANDLE_DB_NAME, 1);
+      request.onupgradeneeded = function(event) {
+        var db = event.target.result;
+        if (!db.objectStoreNames.contains(DIR_HANDLE_STORE_NAME)) db.createObjectStore(DIR_HANDLE_STORE_NAME);
+      };
+      request.onsuccess = function(event) { resolve(event.target.result); };
+      request.onerror = function(event) { reject(event.target.error); };
+    });
+  }
+
+  async function saveDirectoryHandle(handle) {
+    var db = await openDirectoryDB();
+    var tx = db.transaction(DIR_HANDLE_STORE_NAME, 'readwrite');
+    tx.objectStore(DIR_HANDLE_STORE_NAME).put(handle, DIR_HANDLE_KEY);
+    await new Promise(function(resolve, reject) { tx.oncomplete = resolve; tx.onerror = reject; });
+    db.close();
+  }
+
+  async function loadDirectoryHandle() {
+    var db = await openDirectoryDB();
+    var tx = db.transaction(DIR_HANDLE_STORE_NAME, 'readonly');
+    var getRequest = tx.objectStore(DIR_HANDLE_STORE_NAME).get(DIR_HANDLE_KEY);
+    var handle = await new Promise(function(resolve, reject) {
+      getRequest.onsuccess = function() { resolve(getRequest.result); };
+      getRequest.onerror = reject;
+    });
+    db.close();
+    if (handle && handle.queryPermission) {
+      var permission = await handle.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') return null;
+    }
+    return handle;
+  }
+
+  async function writeFileToDirectory(directoryHandle, filename, content) {
+    var fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+    var writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+  }
+
+  btnDownload.addEventListener('click', async function() {
+    var currentCode = codeEditor.value;
+    if (!currentCode.trim()) { showToast('⚠️ 编辑器为空，无法下载', true); return; }
+    var fileExtension = languageExtensions[EditorState.currentLanguage] || 'txt';
+    var mimeTypes = { html: 'text/html', css: 'text/css', js: 'text/javascript', py: 'text/x-python' };
+    var mimeType = mimeTypes[EditorState.currentLanguage] || 'text/plain';
+
+    if (window.showDirectoryPicker) {
+      try {
+        var directoryHandle = await loadDirectoryHandle();
+        if (!directoryHandle) {
+          directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+          await saveDirectoryHandle(directoryHandle);
+        }
+        var userInputFilename = prompt('请输入文件名（无需后缀）:', 'code');
+        if (userInputFilename === null) return;
+        var finalFilename = (userInputFilename.trim() || 'code') + '.' + fileExtension;
+        await writeFileToDirectory(directoryHandle, finalFilename, currentCode);
+        showToast('💾 已保存 "' + finalFilename + '" 到上次选择的目录');
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        else if (err.name === 'NotAllowedError') {
+          showToast('⚠️ 目录权限已失效，下次保存将重新选择', true);
+          try {
+            var db = await openDirectoryDB();
+            var tx = db.transaction(DIR_HANDLE_STORE_NAME, 'readwrite');
+            tx.objectStore(DIR_HANDLE_STORE_NAME).delete(DIR_HANDLE_KEY);
+            await new Promise(function(r) { tx.oncomplete = r; });
+            db.close();
+          } catch (e) {}
+          return;
+        } else { console.error('保存失败:', err); }
+      }
+    }
+
+    var userInputFilename = prompt('请输入文件名（无需后缀）:', 'code');
+    if (userInputFilename === null) return;
+    var finalFilename = (userInputFilename.trim() || 'code') + '.' + fileExtension;
+    var blob = new Blob([currentCode], { type: mimeType });
+    var downloadUrl = URL.createObjectURL(blob);
+    var downloadLink = document.createElement('a');
+    downloadLink.href = downloadUrl;
+    downloadLink.download = finalFilename;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    URL.revokeObjectURL(downloadUrl);
+    showToast('💾 已下载 ' + finalFilename);
+  });
+
+  async function changeSaveDirectory() {
+    if (!window.showDirectoryPicker) {
+      showToast('⚠️ 您的浏览器不支持目录选择，请使用传统下载', true);
+      return;
+    }
+    try {
+      const directoryHandle = await window.showDirectoryPicker({
+        mode: 'readwrite',
+        startIn: 'documents'
+      });
+      await saveDirectoryHandle(directoryHandle);
+      showToast('📁 保存位置已更新');
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      console.error('更改保存位置失败:', err);
+      showToast('❌ 更改保存位置失败', true);
+    }
+  }
+
+  btnChangeSaveDir.addEventListener('click', changeSaveDirectory);
+
+  // ==================== 弹窗拖拽与调整大小 ====================
+  replaceModalHeader.addEventListener('mousedown', function(event) {
+    EditorState.isDragging = true;
+    var modalRect = replaceModal.getBoundingClientRect();
+    EditorState.dragOffsetX = event.clientX - modalRect.left;
+    EditorState.dragOffsetY = event.clientY - modalRect.top;
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', stopDrag);
+  });
+
+  function onDrag(event) {
+    if (!EditorState.isDragging) return;
+    replaceModal.style.left = (event.clientX - EditorState.dragOffsetX) + 'px';
+    replaceModal.style.top = (event.clientY - EditorState.dragOffsetY) + 'px';
+    replaceModal.style.position = 'fixed';
+    replaceModal.style.margin = '0';
+  }
+
+  function stopDrag() {
+    EditorState.isDragging = false;
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', stopDrag);
+    var modalRect = replaceModal.getBoundingClientRect();
+    saveToLocalStorage(STORAGE_KEYS.REPLACE_MODAL_POSITION, { left: modalRect.left, top: modalRect.top });
+  }
+
+  function startResize(event, direction) {
+    EditorState.isResizing = true;
+    EditorState.resizeDirection = direction;
+    EditorState.resizeStartX = event.clientX;
+    EditorState.resizeStartY = event.clientY;
+    var modalRect = replaceModal.getBoundingClientRect();
+    EditorState.startWidth = modalRect.width;
+    EditorState.startHeight = modalRect.height;
+    EditorState.startLeft = modalRect.left;
+    EditorState.startTop = modalRect.top;
+    document.addEventListener('mousemove', onResize);
+    document.addEventListener('mouseup', stopResize);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function onResize(event) {
+    if (!EditorState.isResizing) return;
+    var deltaX = event.clientX - EditorState.resizeStartX;
+    var deltaY = event.clientY - EditorState.resizeStartY;
+    var minimumWidth = 300;
+    var minimumHeight = 200;
+    if (EditorState.resizeDirection === 'right') {
+      var newWidth = EditorState.startWidth + deltaX;
+      if (newWidth > minimumWidth) replaceModal.style.width = newWidth + 'px';
+    } else if (EditorState.resizeDirection === 'bottom') {
+      var newHeight = EditorState.startHeight + deltaY;
+      if (newHeight > minimumHeight) replaceModal.style.height = newHeight + 'px';
+    } else if (EditorState.resizeDirection === 'corner') {
+      var newWidth = EditorState.startWidth + deltaX;
+      var newHeight = EditorState.startHeight + deltaY;
+      if (newWidth > minimumWidth) replaceModal.style.width = newWidth + 'px';
+      if (newHeight > minimumHeight) replaceModal.style.height = newHeight + 'px';
+    }
+  }
+
+  function stopResize() {
+    EditorState.isResizing = false;
+    EditorState.resizeDirection = null;
+    document.removeEventListener('mousemove', onResize);
+    document.removeEventListener('mouseup', stopResize);
+    var modalRect = replaceModal.getBoundingClientRect();
+    saveToLocalStorage(STORAGE_KEYS.REPLACE_MODAL_SIZE, { width: modalRect.width, height: modalRect.height });
+  }
+
+  resizeHandleRight.addEventListener('mousedown', function(event) { startResize(event, 'right'); });
+  resizeHandleBottom.addEventListener('mousedown', function(event) { startResize(event, 'bottom'); });
+  resizeHandleCorner.addEventListener('mousedown', function(event) { startResize(event, 'corner'); });
+
+  replaceModalClose.addEventListener('click', closeReplaceModal);
+  replaceModalOverlay.addEventListener('click', function(event) {
+    if (event.target === replaceModalOverlay) closeReplaceModal();
+  });
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && replaceModalOverlay.classList.contains('open')) closeReplaceModal();
+  });
+
+  btnFindNext.addEventListener('click', findNext);
+  btnReplaceOne.addEventListener('click', replaceOne);
+  btnReplaceAll.addEventListener('click', replaceAll);
+
+  // ==================== 语言切换 ====================
+  function switchLanguage(language) {
+    EditorState.currentLanguage = language;
+    saveToLocalStorage(STORAGE_KEYS.LANGUAGE, language);
+    for (var i = 0; i < langLabels.length; i++) {
+      var label = langLabels[i];
+      var isActive = label.dataset.lang === language;
+      label.classList.toggle('active', isActive);
+      label.setAttribute('aria-pressed', isActive);
+    }
+    langDisplay.textContent = languageDisplayNames[language] || language;
+    scheduleHighlightUpdate();
+  }
+
+  for (var i = 0; i < langLabels.length; i++) {
+    langLabels[i].addEventListener('click', function() {
+      switchLanguage(this.dataset.lang);
+    });
+  }
+
+  // ==================== 缩进设置 ====================
+  function updateIndentIndicator() {
+    if (EditorState.indentCharacter === '\t') {
+      indentIndicator.textContent = 'Tab';
+    } else {
+      indentIndicator.textContent = EditorState.indentSize + '空格';
+    }
+    saveToLocalStorage(STORAGE_KEYS.INDENT, { size: EditorState.indentSize, character: EditorState.indentCharacter });
+  }
+
+  function loadIndentSetting() {
+    var savedIndent = loadFromLocalStorage(STORAGE_KEYS.INDENT, { size: 4, character: ' ' });
+    EditorState.indentSize = savedIndent.size;
+    EditorState.indentCharacter = savedIndent.character;
+  }
+
+  indentIndicator.addEventListener('click', function() {
+    if (EditorState.indentCharacter === ' ' && EditorState.indentSize === 4) {
+      EditorState.indentSize = 2;
+      EditorState.indentCharacter = ' ';
+    } else if (EditorState.indentCharacter === ' ' && EditorState.indentSize === 2) {
+      EditorState.indentSize = 8;
+      EditorState.indentCharacter = ' ';
+    } else if (EditorState.indentCharacter === ' ' && EditorState.indentSize === 8) {
+      EditorState.indentCharacter = '\t';
+    } else {
+      EditorState.indentCharacter = ' ';
+      EditorState.indentSize = 4;
+    }
+    updateIndentIndicator();
+    var indentDisplay = EditorState.indentCharacter === '\t' ? 'Tab' : EditorState.indentSize + ' 空格';
+    showToast('缩进设置已切换为 ' + indentDisplay);
+  });
+
+  // ==================== 主题切换 ====================
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    EditorState.theme = theme;
+    saveToLocalStorage(STORAGE_KEYS.THEME, theme);
+    if (theme === 'light') btnTheme.textContent = '🌙';
+    else if (theme === 'ink') btnTheme.textContent = '🌊';
+    else if (theme === 'cream') btnTheme.textContent = '🧁';
+    else btnTheme.textContent = '☀️';
+    btnTheme.setAttribute('aria-label', '切换主题（当前：' + theme + '）');
+    syncShadowCSSVariables();
+  }
+
+  btnTheme.addEventListener('click', function() {
+    var currentTheme = document.documentElement.getAttribute('data-theme');
+    var themes = ['dark', 'light', 'ink', 'cream'];
+    var currentIndex = themes.indexOf(currentTheme);
+    var nextTheme = themes[(currentIndex + 1) % themes.length];
+    setTheme(nextTheme);
+    showToast('主题已切换为 ' + nextTheme);
+  });
+
+  function loadTheme() {
+    var savedTheme = loadFromLocalStorage(STORAGE_KEYS.THEME, 'dark');
+    setTheme(savedTheme);
+  }
+
+  // ==================== 字体缩放 ====================
+  function setFontSize(size) {
+    EditorState.currentFontSize = Math.max(10, Math.min(30, size));
+    document.documentElement.style.setProperty('--editor-font-size', EditorState.currentFontSize + 'px');
+    saveToLocalStorage(STORAGE_KEYS.FONT_SIZE, EditorState.currentFontSize);
+    syncShadowCSSVariables();
+  }
+
+  document.addEventListener('keydown', function(event) {
+    if ((event.ctrlKey || event.metaKey) && event.key === '=') {
+      event.preventDefault();
+      setFontSize(EditorState.currentFontSize + 1);
+      showToast('字体大小: ' + EditorState.currentFontSize + 'px');
+    } else if ((event.ctrlKey || event.metaKey) && event.key === '-') {
+      event.preventDefault();
+      setFontSize(EditorState.currentFontSize - 1);
+      showToast('字体大小: ' + EditorState.currentFontSize + 'px');
+    } else if ((event.ctrlKey || event.metaKey) && event.key === '0') {
+      event.preventDefault();
+      setFontSize(14);
+      showToast('字体已重置为 14px');
+    }
+  });
+
+  function applyInitialFontSize() {
+    var savedSize = loadFromLocalStorage(STORAGE_KEYS.FONT_SIZE, 14);
+    EditorState.currentFontSize = savedSize;
+    document.documentElement.style.setProperty('--editor-font-size', savedSize + 'px');
+    syncShadowCSSVariables();
+  }
+
+  // ==================== 自动换行 ====================
+  btnWrap.addEventListener('click', function() {
+    EditorState.wordWrapEnabled = !EditorState.wordWrapEnabled;
+    if (EditorState.wordWrapEnabled) {
+      codeEditor.wrap = 'soft';
+      btnWrap.style.color = 'var(--accent)';
+    } else {
+      codeEditor.wrap = 'off';
+      btnWrap.style.color = '';
+    }
+    saveToLocalStorage(STORAGE_KEYS.WRAP_ENABLED, EditorState.wordWrapEnabled);
+    scheduleHighlightUpdate();
+    showToast(EditorState.wordWrapEnabled ? '自动换行：开' : '自动换行：关');
+  });
+
+  function applyInitialWrap() {
+    var savedWrap = loadFromLocalStorage(STORAGE_KEYS.WRAP_ENABLED, false);
+    EditorState.wordWrapEnabled = savedWrap;
+    codeEditor.wrap = savedWrap ? 'soft' : 'off';
+    if (savedWrap) btnWrap.style.color = 'var(--accent)';
+  }
+
+  // ==================== 快捷键帮助弹窗 ====================
+  btnHelp.addEventListener('click', function() {
+    EditorState.lastFocusedElement = document.activeElement;
+    helpModal.classList.add('open');
+    btnCloseHelp.focus();
+  });
+
+  btnCloseHelp.addEventListener('click', function() {
+    helpModal.classList.remove('open');
+    if (EditorState.lastFocusedElement) EditorState.lastFocusedElement.focus();
+  });
+
+  helpModal.addEventListener('click', function(event) {
+    if (event.target === helpModal) {
+      helpModal.classList.remove('open');
+      if (EditorState.lastFocusedElement) EditorState.lastFocusedElement.focus();
+    }
+  });
+
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && helpModal.classList.contains('open')) {
+      helpModal.classList.remove('open');
+      if (EditorState.lastFocusedElement) EditorState.lastFocusedElement.focus();
+    }
+  });
+
+  // ==================== 全局快捷键 ====================
+  document.addEventListener('keydown', function(event) {
+    var activeElement = document.activeElement;
+    var isInsideEditor = activeElement === codeEditor || activeElement.closest('.container');
+    if (!isInsideEditor && activeElement !== document.body) return;
+
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'C') {
+      event.preventDefault();
+      copyCode();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'f') {
+      event.preventDefault();
+      if (!replaceModalOverlay.classList.contains('open')) openReplaceModal();
+      replaceFind.focus();
+      replaceFind.select();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'h') {
+      event.preventDefault();
+      if (!replaceModalOverlay.classList.contains('open')) openReplaceModal();
+      replaceWith.focus();
+      replaceWith.select();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'g') {
+      event.preventDefault();
+      var lineInput = prompt('跳转到行号:');
+      if (lineInput && !isNaN(lineInput)) {
+        var allLines = codeEditor.value.split('\n');
+        var targetLine = Math.min(Math.max(1, parseInt(lineInput)), allLines.length);
+        var characterPosition = 0;
+        for (var j = 0; j < targetLine - 1; j++) characterPosition += allLines[j].length + 1;
+        codeEditor.focus();
+        codeEditor.setSelectionRange(characterPosition, characterPosition);
+        updateCursorPosition();
+      }
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 't') {
+      event.preventDefault();
+      var currentTheme = document.documentElement.getAttribute('data-theme');
+      var themes = ['dark', 'light', 'ink', 'cream'];
+      var currentIndex = themes.indexOf(currentTheme);
+      var nextTheme = themes[(currentIndex + 1) % themes.length];
+      setTheme(nextTheme);
+      showToast('主题: ' + nextTheme);
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+      event.preventDefault();
+      saveImmediately().catch(function() {});
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      handleUndo();
+      updateUndoRedoState();
+    }
+    if ((event.ctrlKey || event.metaKey) && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
+      event.preventDefault();
+      handleRedo();
+      updateUndoRedoState();
+    }
+  });
+
+  // ==================== 撤销/重做 ====================
+  function handleUndo() {
+    codeEditor.focus();
+    document.execCommand('undo');
+  }
+
+  function handleRedo() {
+    codeEditor.focus();
+    document.execCommand('redo');
+  }
+
+  function updateUndoRedoState() {
+    btnUndo.disabled = !document.queryCommandEnabled('undo');
+    btnRedo.disabled = !document.queryCommandEnabled('redo');
+  }
+
+  btnUndo.addEventListener('click', function() {
+    handleUndo();
+    updateUndoRedoState();
+  });
+  btnRedo.addEventListener('click', function() {
+    handleRedo();
+    updateUndoRedoState();
+  });
+
+  codeEditor.addEventListener('input', updateUndoRedoState);
+  codeEditor.addEventListener('keyup', updateUndoRedoState);
+  updateUndoRedoState();
+
+  // ==================== 复制功能 ====================
+  async function copyCode() {
+    var currentCode = codeEditor.value;
+    if (!currentCode.trim()) {
+      showToast('⚠️ 编辑器为空，请先输入代码', true);
+      return;
+    }
+    var copied = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(currentCode);
+        copied = true;
+      } else {
+        copied = fallbackCopy(currentCode);
+      }
+    } catch (clipboardError) {
+      copied = fallbackCopy(currentCode);
+    }
+
+    if (copied) {
+      copyIcon.style.display = 'none';
+      checkIcon.style.display = 'inline-block';
+      copyText.textContent = '已复制!';
+      btnCopy.style.background = 'var(--green-bg)';
+      btnCopy.style.color = 'var(--green)';
+      btnCopy.style.borderColor = 'rgba(166,227,161,0.3)';
+      showToast('✅ 代码已复制到剪贴板');
+      if (EditorState.copyRestoreTimer) {
+        clearTimeout(EditorState.copyRestoreTimer);
+      }
+      EditorState.copyRestoreTimer = setTimeout(function() {
+        checkIcon.style.display = 'none';
+        copyIcon.style.display = 'inline-block';
+        copyText.textContent = '复制';
+        btnCopy.style.background = '';
+        btnCopy.style.color = '';
+        btnCopy.style.borderColor = '';
+        EditorState.copyRestoreTimer = null;
+      }, 2000);
+    } else {
+      showToast('❌ 复制失败，请手动选择复制', true);
+    }
+  }
+
+  function fallbackCopy(text) {
+    try {
+      var tempTextarea = document.createElement('textarea');
+      tempTextarea.value = text;
+      tempTextarea.style.position = 'fixed';
+      tempTextarea.style.left = '-9999px';
+      tempTextarea.style.top = (window.pageYOffset || document.documentElement.scrollTop) + 'px';
+      document.body.appendChild(tempTextarea);
+      tempTextarea.focus();
+      tempTextarea.select();
+      var successful = document.execCommand('copy');
+      document.body.removeChild(tempTextarea);
+      return successful;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  btnCopy.addEventListener('click', copyCode);
+
+  // ==================== 清空与全选 ====================
+  function clearEditor() {
+    if (!codeEditor.value.trim()) {
+      showToast('编辑器已为空');
+      return;
+    }
+    if (!confirm('确定要清空编辑器中的所有代码吗？')) {
+      return;
+    }
+    codeEditor.value = '';
+    fullUpdate();
+    codeEditor.focus();
+    showToast('🗑️ 编辑器已清空');
+  }
+
+  function selectAll() {
+    codeEditor.focus();
+    codeEditor.select();
+    updateCursorPosition();
+  }
+
+  function toggleClearButton() {
+    btnClear.disabled = (codeEditor.value === '');
+  }
+
+  btnClear.addEventListener('click', clearEditor);
+  btnSelectAll.addEventListener('click', selectAll);
+  btnToggleReplace.addEventListener('click', toggleReplaceModal);
+
+  // ==================== 加载文件内容（优化：大文件时关闭高亮，避免卡顿） ====================
+  function loadFileContent(content, fileName) {
+    var previousHighlightEnabled = EditorState.highlightEnabled;
+    var previousUserForced = EditorState.userForcedHighlight;
+
+    EditorState.highlightEnabled = false;
+
+    codeEditor.focus();
+    codeEditor.select();
+    if (document.queryCommandSupported('insertText')) {
+      document.execCommand('insertText', false, content);
+    } else {
+      codeEditor.value = content;
+    }
+
+    fullUpdate();
+    setOriginalCode(content);
+
+    var lineCount = getLineCount(content);
+    if (previousUserForced) {
+      EditorState.highlightEnabled = true;
+    } else if (lineCount > EditorState.largeFileThreshold) {
+      EditorState.highlightEnabled = false;
+    } else {
+      EditorState.highlightEnabled = previousHighlightEnabled;
+    }
+
+    if (EditorState.highlightEnabled) {
+      btnEnableHighlight.style.display = 'none';
+      btnDisableHighlight.style.display = 'inline-block';
+      largeFileWarning.style.display = 'none';
+    } else {
+      btnEnableHighlight.style.display = 'inline-block';
+      btnDisableHighlight.style.display = 'none';
+      if (lineCount > EditorState.largeFileThreshold) {
+        largeFileWarning.style.display = 'block';
+      } else {
+        largeFileWarning.style.display = 'none';
+      }
+    }
+
+    saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, EditorState.highlightEnabled);
+    scheduleHighlightUpdate();
+
+    var fileExtension = fileName.split('.').pop().toLowerCase();
+    var extensionLanguageMap = { js: 'js', ts: 'js', jsx: 'js', html: 'html', css: 'css', py: 'python', json: 'js', xml: 'html', md: 'html' };
+    if (extensionLanguageMap[fileExtension]) switchLanguage(extensionLanguageMap[fileExtension]);
+  }
+
+  // ==================== 大文件高亮开关逻辑 ====================
+  function setHighlightEnabled(enabled) {
+    EditorState.highlightEnabled = enabled;
+    saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, enabled);
+    if (enabled) {
+      btnEnableHighlight.style.display = 'none';
+      btnDisableHighlight.style.display = 'inline-block';
+      largeFileWarning.style.display = 'none';
+      EditorState.userForcedHighlight = true;
+      scheduleHighlightUpdate();
+    } else {
+      btnEnableHighlight.style.display = 'inline-block';
+      btnDisableHighlight.style.display = 'none';
+      EditorState.userForcedHighlight = false;
+      if (getLineCount(codeEditor.value) > EditorState.largeFileThreshold) {
+        largeFileWarning.style.display = 'block';
+      }
+      var escapedCode = escapeHtml(codeEditor.value);
+      updateShadowHighlight(escapedCode, EditorState.wordWrapEnabled);
+      syncShadowScroll();
+    }
+  }
+
+  btnEnableHighlight.addEventListener('click', function() {
+    setHighlightEnabled(true);
+    showToast('✅ 实时高亮已开启');
+  });
+  btnDisableHighlight.addEventListener('click', function() {
+    setHighlightEnabled(false);
+    showToast('实时高亮已关闭');
+  });
+
+  // ==================== Toast 提示 ====================
+  function showToast(message, isError) {
+    if (EditorState.toastTimer) {
+      clearTimeout(EditorState.toastTimer);
+    }
+    toast.textContent = message;
+    if (isError) {
+      toast.className = 'toast error';
+    } else {
+      toast.className = 'toast';
+    }
+    void toast.offsetHeight;
+    toast.classList.add('show');
+    EditorState.toastTimer = setTimeout(function() {
+      toast.classList.remove('show');
+      EditorState.toastTimer = null;
+    }, 2500);
+  }
+
+  // ==================== 全量更新（轻量） ====================
+  function fullUpdate() {
+    updateLineCounts();
+    updateCursorPosition();
+    scheduleHighlightUpdate();
+    updateMatchCount();
+  }
+
+  function debouncedUpdate() {
+    if (EditorState.updateTimer) {
+      clearTimeout(EditorState.updateTimer);
+    }
+    EditorState.updateTimer = setTimeout(fullUpdate, 80);
+  }
+
+  // ==================== 窗口大小变化同步 ====================
+  window.addEventListener('resize', function() {
+    syncScroll();
+    updateLineNumbers();
+  });
+
+  // ==================== 页面关闭前释放资源 ====================
+  window.addEventListener('beforeunload', function() {
+    if (EditorState.highlightWorker) {
+      EditorState.highlightWorker.terminate();
+      EditorState.highlightWorker = null;
+    }
+    if (EditorState.updateTimer) clearTimeout(EditorState.updateTimer);
+    if (EditorState.autoSaveTimer) clearTimeout(EditorState.autoSaveTimer);
+    if (EditorState.copyRestoreTimer) clearTimeout(EditorState.copyRestoreTimer);
+    if (highlightTimer) clearTimeout(highlightTimer);
+    if (EditorState.codeModified) {
+      return '您有未保存的更改';
+    }
+  });
+
+  // ==================== 初始化流程 ====================
+  async function initialize() {
+    try {
+      await openAutoSaveDatabase();
+    } catch (dbError) {
+      console.warn('IndexedDB 不可用，将仅使用 localStorage 缓存');
+    }
+
+    loadIndentSetting();
+    updateIndentIndicator();
+    loadTheme();
+    applyInitialFontSize();
+    applyInitialWrap();
+
+    EditorState.highlightEnabled = loadFromLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, true);
+    EditorState.userForcedHighlight = false;
+    if (!EditorState.highlightEnabled) {
+      btnEnableHighlight.style.display = 'inline-block';
+      btnDisableHighlight.style.display = 'none';
+    } else {
+      btnEnableHighlight.style.display = 'none';
+      btnDisableHighlight.style.display = 'inline-block';
+    }
+
+    var wasRestored = await loadSavedCode();
+    if (!wasRestored) {
+      codeEditor.value = defaultCode;
+    }
+    setOriginalCode(codeEditor.value);
+
+    try {
+      createHighlightWorker();
+    } catch (workerError) {
+      console.warn('Web Worker 创建失败，将使用降级模式', workerError);
+    }
+
+    setupShadowHighlightLayer();
+
+    restoreReplaceInputs();
+    fullUpdate();
+    toggleClearButton();
+
+    EditorState.currentLanguage = loadFromLocalStorage(STORAGE_KEYS.LANGUAGE, 'js');
+    for (var i = 0; i < langLabels.length; i++) {
+      var label = langLabels[i];
+      label.classList.toggle('active', label.dataset.lang === EditorState.currentLanguage);
+      label.setAttribute('aria-pressed', label.dataset.lang === EditorState.currentLanguage);
+    }
+    langDisplay.textContent = languageDisplayNames[EditorState.currentLanguage] || EditorState.currentLanguage;
+
+    try {
+      await saveCodeToIndexedDB(codeEditor.value);
+    } catch (e) {}
+
+    codeEditor.focus();
+    console.log('%c🚀 专业版编辑器 v5.0.0 已就绪（Worker高亮版）', 'color:#a3be8c;font-weight:bold;');
+  }
+
+  initialize();
+})();
+</script>
+</body>
+</html>
