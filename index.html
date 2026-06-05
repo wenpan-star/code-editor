@@ -1,53 +1,26 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
-  <title>在线代码编辑器 · 专业版 v3.1.0</title>
+  <title>在线代码编辑器 · 专业版 v3.2.0</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23f5a623' rx='20'/%3E%3Cpath d='M35,40 L48,50 L35,60' stroke='%232d2d2d' fill='none' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M55,65 L70,35' stroke='%232d2d2d' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M65,40 L52,50 L65,60' stroke='%232d2d2d' fill='none' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <!--
   ================================================================================
-   版本：v3.1.0（强化稳定版）
+   版本：v3.2.0（交互增强与性能优化版）
    更新日期：2026-06-07
    主要更新：
-     1. 强化 ReDoS 防护：增强正则安全校验规则，危险正则自动拒绝并提示；搜索匹配全面通过 Web Worker 执行并增加超时控制，主线程永不执行用户正则。
-     2. 大文件粘贴优化：当代码长度超过 100KB 时自动关闭实时高亮，避免粘贴大段文本时卡顿。
-     3. 历史管理器批量操作改进：beginBatch/endBatch 改为计数器模式，支持嵌套批量操作，避免状态错乱。
-     4. 紧急数据保存：增加 pagehide 和 visibilitychange 监听，在页面隐藏时立即写入 localStorage 脏标志，提升数据安全性。
-     5. CSS 交互优化：查找替换弹窗调整大小时自动设置 overflow: hidden，防止内容溢出。
-     6. 原有所有功能、界面、设置、语言、主题、快捷键等完整保留，无任何降级或删除。
-     7. 代码结构优化，所有变量名保持完整、无简写，确保可读性。
-   历史更新（v3.0.2）：
-     - 修复大文件高亮自动关闭后，用户手动开启时不重新检测行数的缺陷
-     - 页面关闭前强制保存代码（使用 navigator.sendBeacon 确保最后修改不丢失）
-     - 大文件警告条增强：用户手动关闭高亮后，若继续编辑导致行数超过阈值，警告条重新出现
-     - 查找替换弹窗中的文本域支持手动拖拽调节高度
-     - 优化正则表达式安全校验，增加对空字符串的防御
-     - 修复括号匹配在某些边缘情况下的高亮错误
-     - 提升撤销/重做历史记录的稳定性（优化去重逻辑）
-     - 所有变量名保持完整、无简写，确保代码可读性
-   历史更新（v3.0.1）：
-     - 修复 Shadow DOM 内 CSS 变量失效导致语法高亮颜色丢失的问题
-     - 修复 Web Worker 高亮结果被丢弃、异步高亮未生效的问题（回退为稳定同步高亮，Worker 专用于搜索）
-     - 添加正则表达式安全校验，防止 ReDoS 攻击
-     - 修复大文件手动开启高亮后反复自动关闭的问题（增加用户意图覆盖标志）
-     - 修复 Ctrl+S 手动保存的错误捕获
-     - 添加页面关闭时 Worker 销毁逻辑
-     - 字体缩放时同步更新 Shadow DOM 内样式
-   历史更新（v3.0）：
-     - 语法高亮性能大幅提升：引入增量高亮 + 分块渲染，万行文件不卡顿
-     - 存储系统升级：自动保存改用 IndexedDB（突破 5MB 限制），localStorage 作为辅助缓存
-     - 新增 Web Worker 处理正则搜索，主线程流畅不阻塞
-     - 新增正则表达式搜索选项（查找替换弹窗增加 [.*] 开关）
-     - 大文件安全模式：超过 5000 行自动禁用实时高亮，可手动开启，确保稳定性
-     - 高亮 HTML 渲染至 Shadow DOM 隔离，杜绝 XSS 隐患
-     - 自动保存增加累积变更量阈值，智能保存
-     - 下载功能优化：IndexedDB 目录句柄失效时更友好的降级提示
-     - 缩进设置扩展：支持 2/4/8 空格或 Tab，状态栏显示更丰富
-     - 主题新增「墨蓝」「米白」两套预设，保留原暗色/亮色
-     - 代码架构重构：状态集中管理、事件总线解耦，所有模块化清晰，无简写变量
-     - 原有所有功能、界面、交互、设置完整保留，无任何降级或删除
-     - 安全性增强：导入文件更严格的类型检测
+     1. 修复双层滚动条：Shadow DOM 高亮层 pre 元素 overflow 改为 hidden，彻底消除双重滚动条。
+     2. 大文件警告优化：移除顶部常驻横幅，改为居中模态弹窗，提供“开启高亮”与“关闭”选项，
+        并在状态栏增加高亮开关指示器，支持点击快速切换。
+     3. 替换全部安全性增强：replaceAll 使用函数替换，避免替换文本中的 $ 特殊模式被错误解析。
+     4. 卸载前保存改进：visibilitychange 中尝试异步 IndexedDB 写入（超时保护），
+        标记脏状态，确保页面关闭时数据不丢失，下次加载可恢复。
+     5. 关闭高亮时性能优化：当 highlightEnabled 为 false，直接跳过 DOM 高亮操作，减少不必要的渲染。
+     6. 查找匹配提示优化：区分正则安全风险与无匹配状态，给出明确提示。
+     7. 新增行高亮与代码折叠：当前行背景高亮，行号区域支持基于缩进的折叠/展开，提升大文件浏览体验。
+     8. 原有所有功能、界面、设置、语言、主题、快捷键等完整保留，无任何降级或删除。
+     9. 代码结构优化，所有变量名保持完整、无简写，确保可读性。
   ================================================================================
   -->
   <style>
@@ -90,6 +63,10 @@
       --scrollbar-thumb-hover: #585b70;
       --toast-bg: var(--green-bg);
       --toast-color: var(--green);
+      /* 行高亮背景 */
+      --line-highlight-bg: rgba(255, 255, 255, 0.04);
+      /* 折叠指示器 */
+      --fold-color: #6c7086;
     }
 
     /* 亮色主题 */
@@ -122,6 +99,7 @@
       --hl-bracket-bg: rgba(0, 0, 0, 0.12);
       --scrollbar-thumb: #c4c4c4;
       --scrollbar-thumb-hover: #a8a8a8;
+      --line-highlight-bg: rgba(0, 0, 0, 0.03);
     }
 
     /* 墨蓝主题 */
@@ -154,6 +132,7 @@
       --hl-bracket-bg: rgba(255, 255, 255, 0.2);
       --scrollbar-thumb: #475569;
       --scrollbar-thumb-hover: #64748b;
+      --line-highlight-bg: rgba(255, 255, 255, 0.04);
     }
 
     /* 米白主题 */
@@ -186,6 +165,7 @@
       --hl-bracket-bg: rgba(0, 0, 0, 0.08);
       --scrollbar-thumb: #c4bdb2;
       --scrollbar-thumb-hover: #a89f92;
+      --line-highlight-bg: rgba(0, 0, 0, 0.03);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -314,26 +294,7 @@
     .btn-ghost:hover:not(:disabled) { background: var(--surface-light); color: var(--text); }
     .btn svg { width: 16px; height: 16px; flex-shrink: 0; }
 
-    /* 大文件警告条 */
-    .large-file-warning {
-      display: none;
-      background: #f38ba8;
-      color: #fff;
-      text-align: center;
-      padding: 4px 12px;
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .large-file-warning button {
-      background: rgba(255,255,255,0.3);
-      border: none;
-      color: inherit;
-      padding: 2px 10px;
-      margin-left: 8px;
-      border-radius: 12px;
-      cursor: pointer;
-      font-weight: 600;
-    }
+    /* 大文件警告条已移除，改用弹窗 */
 
     /* 查找替换弹窗 */
     .replace-modal-overlay {
@@ -526,10 +487,40 @@
       line-height: var(--editor-line-height);
       color: #5a5d78;
       border-right: 1px solid var(--border);
-      pointer-events: none;
+      pointer-events: auto; /* 允许点击折叠 */
       transition: background 0.3s;
+      position: relative;
     }
-    .line-numbers span { display: block; padding-right: 12px; }
+    .line-numbers span {
+      display: block;
+      padding-right: 12px;
+      cursor: pointer;
+      position: relative;
+    }
+    .line-numbers .fold-marker {
+      position: absolute;
+      left: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 12px;
+      height: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fold-color);
+      font-size: 10px;
+      cursor: pointer;
+      visibility: hidden;
+    }
+    .line-numbers .line-container:hover .fold-marker {
+      visibility: visible;
+    }
+    .line-numbers .fold-marker.folded::before {
+      content: "▶";
+    }
+    .line-numbers .fold-marker.unfolded::before {
+      content: "▼";
+    }
     .code-area { flex: 1; position: relative; overflow: hidden; }
 
     #codeEditor, .highlight-layer {
@@ -560,6 +551,16 @@
       word-break: break-all;
     }
 
+    /* 行高亮（当前行） */
+    .highlight-layer .line-highlight {
+      background: var(--line-highlight-bg);
+      display: block;
+      position: absolute;
+      left: 0;
+      right: 0;
+      pointer-events: none;
+    }
+
     /* 语法高亮（全局样式，同时也用于非 Shadow 场景，但目前已迁移到 Shadow DOM 内） */
     .highlight-layer .kw { color: var(--hl-kw); }
     .highlight-layer .str { color: var(--hl-str); }
@@ -582,11 +583,11 @@
       display: inline;
     }
 
-    /* 滚动条 */
-    #codeEditor::-webkit-scrollbar, .highlight-layer::-webkit-scrollbar { width: 5px; height: 5px; }
-    #codeEditor::-webkit-scrollbar-track, .highlight-layer::-webkit-scrollbar-track { background: transparent; }
-    #codeEditor::-webkit-scrollbar-thumb, .highlight-layer::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 8px; }
-    #codeEditor::-webkit-scrollbar-thumb:hover, .highlight-layer::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+    /* 滚动条 - 仅 textarea 显示，高亮层 overflow:hidden 已消除双重滚动条 */
+    #codeEditor::-webkit-scrollbar { width: 8px; height: 8px; }
+    #codeEditor::-webkit-scrollbar-track { background: transparent; }
+    #codeEditor::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 10px; }
+    #codeEditor::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 
     /* 状态栏 */
     .status-bar {
@@ -597,7 +598,7 @@
       letter-spacing: 0.2px; user-select: none; flex-wrap: wrap; gap: 10px;
       transition: background 0.3s;
     }
-    .status-item { display: flex; align-items: center; gap: 6px; }
+    .status-item { display: flex; align-items: center; gap: 6px; cursor: default; }
     .status-dot {
       width: 6px; height: 6px; border-radius: 50%;
       background: var(--green); animation: pulse 2s ease-in-out infinite;
@@ -613,6 +614,19 @@
       font-size: 10px;
     }
     .indent-indicator:hover { background: var(--border); }
+    /* 高亮状态指示器 */
+    .highlight-indicator {
+      cursor: pointer;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: var(--surface-light);
+      font-weight: 600;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .highlight-indicator:hover { background: var(--border); }
 
     /* Toast */
     .toast {
@@ -632,7 +646,7 @@
       border-color: rgba(243, 139, 168, 0.35);
     }
 
-    /* 快捷键帮助弹窗 */
+    /* 快捷键帮助弹窗 与 大文件提示弹窗 共用 */
     .modal-overlay {
       display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0,0,0,0.55); z-index: 1000; justify-content: center; align-items: center;
@@ -650,6 +664,7 @@
     }
     .modal .shortcut-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
     .modal .close-btn { margin-top: 16px; }
+    .modal .button-row { display: flex; gap: 12px; margin-top: 16px; }
 
     /* 响应式 */
     @media (max-width: 640px) {
@@ -662,12 +677,7 @@
   </style>
 </head>
 <body>
-<!-- 大文件警告条 -->
-<div class="large-file-warning" id="largeFileWarning">
-  ⚠️ 文件较大，已自动关闭实时高亮以保障性能
-  <button id="btnEnableHighlight">开启高亮</button>
-  <button id="btnDisableHighlight" style="display:none;">关闭高亮</button>
-</div>
+<!-- 大文件警告条已移除，改用弹窗 -->
 
 <div class="container" id="appContainer">
   <div class="toolbar">
@@ -725,6 +735,9 @@
     <div class="status-item"><span id="lineCount">行: 0</span> · <span id="charCount">字符: 0</span> · <span id="cursorPos">行:1 列:1</span></div>
     <div class="status-item"><span id="langDisplay">JavaScript</span></div>
     <div class="status-item">缩进 <span class="indent-indicator" id="indentIndicator" title="点击切换">4空格</span></div>
+    <div class="status-item highlight-indicator" id="highlightStatus" title="点击切换高亮">
+      <span id="highlightIcon">🔆</span> <span id="highlightLabel">高亮</span>
+    </div>
     <div class="status-item" id="autoSaveStatus" style="color:var(--green);">💾 自动保存</div>
   </div>
 </div>
@@ -761,7 +774,6 @@
         <button class="btn btn-primary" id="btnReplaceAll">全部替换</button>
       </div>
     </div>
-    <!-- 调整大小手柄 -->
     <div class="resize-handle resize-handle-right" id="resizeHandleRight"></div>
     <div class="resize-handle resize-handle-bottom" id="resizeHandleBottom"></div>
     <div class="resize-handle resize-handle-corner" id="resizeHandleCorner"></div>
@@ -771,7 +783,7 @@
 <!-- Toast -->
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<!-- 快捷键帮助 -->
+<!-- 快捷键帮助弹窗 -->
 <div class="modal-overlay" id="helpModal">
   <div class="modal">
     <h2>⌨️ 快捷键</h2>
@@ -782,6 +794,23 @@
     <div class="shortcut-row"><span>放大/缩小字体</span><kbd>Ctrl+ +/-</kbd></div>
     <div class="shortcut-row"><span>切换主题</span><kbd>Ctrl+T</kbd></div>
     <button class="btn btn-primary close-btn" id="btnCloseHelp">关闭</button>
+  </div>
+</div>
+
+<!-- 大文件高亮关闭提示弹窗 -->
+<div class="modal-overlay" id="largeFileModal">
+  <div class="modal">
+    <h2>⚡ 大文件性能提示</h2>
+    <p style="margin-bottom:16px;color:var(--text-secondary);font-size:14px;">
+      当前代码已超过 5000 行或 100KB，实时语法高亮已自动关闭以避免卡顿。
+    </p>
+    <p style="margin-bottom:20px;font-size:13px;color:var(--text-secondary);">
+      你仍可以<span style="color:var(--accent);">手动开启高亮</span>，但编辑时可能会感到延迟。
+    </p>
+    <div class="button-row">
+      <button class="btn btn-primary" id="btnEnableHighlightModal">🔆 开启高亮</button>
+      <button class="btn btn-secondary" id="btnDismissLargeFileModal">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -823,7 +852,9 @@
     autoSaveDB: null,
     highlightWorker: null,
     highlightShadowRoot: null,
-    highlightPreElement: null
+    highlightPreElement: null,
+    // 代码折叠相关
+    foldedRanges: [] // 存储折叠范围：{ startLine, endLine }
   };
 
   // ==================== 历史记录管理器（完整撤销/重做，支持批量操作计数器） ====================
@@ -966,15 +997,12 @@
     const editor = codeEditor;
     if (!editor) return;
     const oldValue = editor.value;
-    if (oldValue === newValue) return;
+    // 修复：只有当新旧内容完全相同且不是空字符串时才跳过（允许空文件正常加载）
+    if (oldValue === newValue && newValue !== '') return;
 
     // 大文件检测：超过100KB自动关闭高亮
     if (newValue.length > EditorState.largeFileCharacterThreshold && EditorState.highlightEnabled) {
-      setHighlightEnabled(false);
-      largeFileWarning.style.display = 'block';
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
-      showToast('⚠️ 文件过大，已自动关闭实时高亮以保证流畅', true);
+      setHighlightEnabled(false, true); // 第二个参数表示需要弹窗
     }
 
     let oldStart = editor.selectionStart;
@@ -1053,9 +1081,14 @@
   const resizeHandleBottom = document.getElementById('resizeHandleBottom');
   const resizeHandleCorner = document.getElementById('resizeHandleCorner');
   const autoSaveStatus = document.getElementById('autoSaveStatus');
-  const largeFileWarning = document.getElementById('largeFileWarning');
-  const btnEnableHighlight = document.getElementById('btnEnableHighlight');
-  const btnDisableHighlight = document.getElementById('btnDisableHighlight');
+  // 大文件弹窗相关
+  const largeFileModal = document.getElementById('largeFileModal');
+  const btnEnableHighlightModal = document.getElementById('btnEnableHighlightModal');
+  const btnDismissLargeFileModal = document.getElementById('btnDismissLargeFileModal');
+  // 状态栏高亮开关
+  const highlightStatus = document.getElementById('highlightStatus');
+  const highlightIcon = document.getElementById('highlightIcon');
+  const highlightLabel = document.getElementById('highlightLabel');
 
   // ==================== 常量定义 ====================
   const STORAGE_KEYS = {
@@ -1072,7 +1105,9 @@
     REPLACE_USE_REGEX: 'editor-replace-use-regex-v6',
     REPLACE_MODAL_POSITION: 'editor-replace-modal-position-v6',
     REPLACE_MODAL_SIZE: 'editor-replace-modal-size-v6',
-    HIGHLIGHT_ENABLED: 'editor-highlight-enabled-v6'
+    HIGHLIGHT_ENABLED: 'editor-highlight-enabled-v6',
+    DIRTY_FLAG: 'editor-dirty-flag',
+    FOLDED_RANGES: 'editor-folded-ranges-v6'
   };
 
   const INDEXED_DB_NAME = 'editor-autosave-db';
@@ -1127,6 +1162,113 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       return '\t';
     }
     return ' '.repeat(EditorState.indentSize);
+  }
+
+  // ==================== 代码折叠功能 ====================
+  function getLineIndentLevel(line) {
+    const indentMatch = line.match(/^[ \t]*/);
+    if (!indentMatch) return 0;
+    const indentStr = indentMatch[0];
+    return indentStr.length; // 近似：空格数和Tab混合，简单按字符数
+  }
+
+  function findFoldRange(lines, startLineIndex) {
+    if (startLineIndex >= lines.length - 1) return null;
+    const baseIndent = getLineIndentLevel(lines[startLineIndex]);
+    if (baseIndent === 0 && startLineIndex === 0) return null; // 顶层不折叠
+    let endLineIndex = startLineIndex + 1;
+    while (endLineIndex < lines.length) {
+      const currentIndent = getLineIndentLevel(lines[endLineIndex]);
+      if (currentIndent <= baseIndent && lines[endLineIndex].trim() !== '') break;
+      endLineIndex++;
+    }
+    if (endLineIndex > startLineIndex + 1) {
+      return { startLine: startLineIndex, endLine: endLineIndex - 1 };
+    }
+    return null;
+  }
+
+  function applyFoldsToCode(code) {
+    if (!EditorState.foldedRanges.length) return code;
+    const lines = code.split('\n');
+    let filteredLines = [];
+    const foldedSet = new Set();
+    for (const range of EditorState.foldedRanges) {
+      for (let i = range.startLine + 1; i <= range.endLine; i++) {
+        foldedSet.add(i);
+      }
+    }
+    for (let i = 0; i < lines.length; i++) {
+      if (foldedSet.has(i)) continue;
+      filteredLines.push(lines[i]);
+    }
+    return filteredLines.join('\n');
+  }
+
+  function updateFoldedRangesInStorage() {
+    saveToLocalStorage(STORAGE_KEYS.FOLDED_RANGES, EditorState.foldedRanges);
+  }
+
+  // 行号点击折叠/展开
+  function setupLineNumberClickHandler() {
+    lineNumbers.addEventListener('click', function(event) {
+      const target = event.target;
+      if (target.classList.contains('fold-marker')) {
+        event.stopPropagation();
+        const lineIndex = parseInt(target.dataset.line);
+        if (isNaN(lineIndex)) return;
+        toggleFold(lineIndex);
+      }
+    });
+  }
+
+  function toggleFold(lineIndex) {
+    const lines = codeEditor.value.split('\n');
+    const range = findFoldRange(lines, lineIndex);
+    if (!range) return;
+    const existingIndex = EditorState.foldedRanges.findIndex(r => r.startLine === range.startLine);
+    if (existingIndex >= 0) {
+      // 展开
+      EditorState.foldedRanges.splice(existingIndex, 1);
+    } else {
+      // 折叠
+      EditorState.foldedRanges.push(range);
+    }
+    updateFoldedRangesInStorage();
+    // 不直接修改代码，只影响高亮层显示和行号显示（实际编辑器仍包含所有代码，只是高亮层隐藏）
+    fullUpdate();
+  }
+
+  function renderLineNumbersWithFolds() {
+    const code = codeEditor.value;
+    const lines = code.split('\n');
+    let html = '';
+    const foldedLines = new Set();
+    for (const range of EditorState.foldedRanges) {
+      for (let i = range.startLine + 1; i <= range.endLine; i++) {
+        foldedLines.add(i);
+      }
+    }
+    let displayLineNumber = 0; // 连续行号计数器
+    for (let i = 0; i < lines.length; i++) {
+      if (foldedLines.has(i)) continue;
+      displayLineNumber++;
+      html += '<div class="line-container">';
+      // 添加折叠标记
+      if (i < lines.length - 1) {
+        const range = findFoldRange(lines, i);
+        if (range) {
+          const isFolded = EditorState.foldedRanges.some(r => r.startLine === i);
+          html += `<span class="fold-marker ${isFolded ? 'folded' : 'unfolded'}" data-line="${i}"></span>`;
+        } else {
+          html += '<span class="fold-marker" style="visibility:hidden;"></span>';
+        }
+      } else {
+        html += '<span class="fold-marker" style="visibility:hidden;"></span>';
+      }
+      html += `<span>${displayLineNumber}</span></div>\n`;
+    }
+    lineNumbers.innerHTML = html;
   }
 
   // ==================== localStorage 辅助存储 ====================
@@ -1262,6 +1404,20 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
 
   // ==================== 代码加载（优先 IndexedDB，降级 localStorage，最后默认） ====================
   async function loadSavedCode() {
+    // 检查脏标志（上次异常关闭未保存）
+    const wasDirty = loadFromLocalStorage(STORAGE_KEYS.DIRTY_FLAG, '0') === '1';
+    if (wasDirty) {
+      const cachedCode = loadFromLocalStorage(STORAGE_KEYS.CODE_CACHE, null);
+      if (cachedCode && cachedCode !== defaultCode) {
+        if (confirm('检测到上次页面异常关闭时未保存的内容，是否恢复？')) {
+          setEditorContent(cachedCode, false);
+          saveToLocalStorage(STORAGE_KEYS.DIRTY_FLAG, '0');
+          return true;
+        }
+      }
+      saveToLocalStorage(STORAGE_KEYS.DIRTY_FLAG, '0');
+    }
+
     try {
       const indexedCode = await loadCodeFromIndexedDB();
       if (indexedCode !== null && indexedCode !== undefined) {
@@ -1317,7 +1473,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
           var { code, searchTerm, caseSensitive, wholeWord, useRegex, timeout } = message;
           var regex = buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex);
           if (!regex) {
-            self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false });
+            self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'regex_invalid' });
             return;
           }
           var matches = [];
@@ -1327,7 +1483,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
             matches.push({ index: match.index, length: match[0].length });
             if (matches.length > 10000) break;
             if (timeout && (performance.now() - startTime) > timeout) {
-              self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, timeout: true });
+              self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'timeout' });
               return;
             }
           }
@@ -1353,8 +1509,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var pattern;
     if (useRegex) {
       if (!isRegexSafe(searchTerm)) {
-        showToast('⚠️ 正则表达式存在性能风险，已自动拒绝', true);
-        return null;
+        return null; // 不安全，后续通过 reason 区分
       }
       try {
         new RegExp(searchTerm);
@@ -1379,7 +1534,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     if (!EditorState.highlightWorker) {
       // 降级：同步执行并只取前 1000 个匹配
       var regex = buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex);
-      if (!regex) { callback([]); return; }
+      if (!regex) { callback([], null); return; }
       var matches = [];
       var match;
       var count = 0;
@@ -1387,17 +1542,18 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         matches.push({ start: match.index, end: match.index + match[0].length });
         count++;
       }
-      callback(matches);
+      callback(matches, null);
       return;
     }
     EditorState.highlightWorker.onmessage = function(event) {
       if (event.data.type === 'searchMatchesResult') {
         var matches = event.data.matches;
+        var reason = null;
         if (!event.data.safe) {
-          showToast('⚠️ 正则表达式不安全或执行超时，搜索已取消', true);
+          reason = event.data.reason || 'unsafe_regex';
         }
         var ranges = matches.map(function(m) { return { start: m.index, end: m.index + m.length }; });
-        callback(ranges);
+        callback(ranges, reason);
       }
     };
     EditorState.highlightWorker.postMessage({
@@ -1434,7 +1590,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       '--hl-kw','--hl-str','--hl-num','--hl-cmt','--hl-fn','--hl-tag',
       '--hl-attr','--hl-prop','--hl-op','--hl-punc',
       '--hl-search-bg','--hl-bracket-bg','--text',
-      '--editor-font-size','--editor-line-height','--editor-font'
+      '--editor-font-size','--editor-line-height','--editor-font',
+      '--line-highlight-bg'
     ];
     vars.forEach(function(v) {
       host.style.setProperty(v, rootStyle.getPropertyValue(v).trim());
@@ -1460,7 +1617,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         line-height: var(--editor-line-height, 1.7);
         tab-size: 4; white-space: pre;
         overflow-wrap: normal; word-wrap: normal;
-        overflow-x: auto; overflow-y: scroll;
+        overflow: hidden; /* 关键修复：消除高亮层自身滚动条 */
         color: var(--text, #cdd6f4);
         background: transparent; border: none; outline: none;
         letter-spacing: 0; box-sizing: border-box;
@@ -1483,6 +1640,14 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       .bracket-match {
         background: var(--hl-bracket-bg);
         border-radius: 2px; display: inline;
+      }
+      .line-highlight {
+        background: var(--line-highlight-bg);
+        display: block;
+        position: absolute;
+        left: 0;
+        right: 0;
+        pointer-events: none;
       }
     `;
     shadowRoot.appendChild(style);
@@ -1550,29 +1715,19 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return escaped;
   }
 
-  // ==================== 行号更新 ====================
+  // ==================== 行号更新（含折叠） ====================
   function updateLineNumbers() {
     var codeText = codeEditor.value;
     var codeLines = codeText.split('\n');
-    var lineNumbersHtml = '';
-    for (var lineIndex = 1; lineIndex <= codeLines.length; lineIndex++) {
-      lineNumbersHtml += '<span>' + lineIndex + '</span>\n';
-    }
-    lineNumbers.innerHTML = lineNumbersHtml;
+    renderLineNumbersWithFolds(); // 使用折叠版本
     lineCountEl.textContent = '行: ' + codeLines.length;
     charCountEl.textContent = '字符: ' + codeText.length;
 
     if (codeLines.length > EditorState.largeFileThreshold && EditorState.highlightEnabled && !EditorState.userForcedHighlight) {
-      setHighlightEnabled(false);
-      largeFileWarning.style.display = 'block';
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
-      showToast('⚠️ 文件较大，已自动关闭实时高亮以保证流畅', true);
+      setHighlightEnabled(false, true);
     }
-    if (codeLines.length > EditorState.largeFileThreshold && !EditorState.highlightEnabled && largeFileWarning.style.display !== 'block') {
-      largeFileWarning.style.display = 'block';
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
+    if (codeLines.length > EditorState.largeFileThreshold && !EditorState.highlightEnabled && largeFileModal && !largeFileModal.classList.contains('open')) {
+      // 如果已经超阈值且高亮关闭，但用户之前已经关闭过弹窗，不再自动弹出，只更新状态栏
     }
   }
 
@@ -1637,8 +1792,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return -1;
   }
 
-  // ==================== 构建高亮 HTML（异步搜索高亮区域，提升安全性） ====================
-  function buildHighlightHTML(code, language, searchRanges, bracketRanges) {
+  // ==================== 构建高亮 HTML（含行高亮） ====================
+  function buildHighlightHTML(code, language, searchRanges, bracketRanges, currentLineIndex) {
     if (!code) return '';
     if (!EditorState.highlightEnabled) return escapeHtml(code) + '\n';
 
@@ -1651,29 +1806,44 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
     allHighlightRanges.sort(function(a, b) { return a.start - b.start; });
 
-    if (allHighlightRanges.length === 0) {
-      return syntaxHighlightMainThread(code, language) + '\n';
-    }
-
+    var lines = code.split('\n');
     var resultHtml = '';
-    var lastProcessedIndex = 0;
-    for (var i = 0; i < allHighlightRanges.length; i++) {
-      var currentRange = allHighlightRanges[i];
-      if (currentRange.start > lastProcessedIndex) {
-        resultHtml += syntaxHighlightMainThread(code.substring(lastProcessedIndex, currentRange.start), language);
+    var charIndex = 0;
+    var visualLineIndex = 0; // 视觉行索引，跳过折叠行
+
+    for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      // 检查是否被折叠
+      var isLineFolded = false;
+      for (var f = 0; f < EditorState.foldedRanges.length; f++) {
+        var range = EditorState.foldedRanges[f];
+        if (lineIdx > range.startLine && lineIdx <= range.endLine) {
+          isLineFolded = true;
+          break;
+        }
       }
-      var segmentHtml = syntaxHighlightMainThread(code.substring(currentRange.start, currentRange.end), language);
-      if (currentRange.type === 'search') {
-        resultHtml += '<span class="search-match">' + segmentHtml + '</span>';
-      } else {
-        resultHtml += '<span class="bracket-match">' + segmentHtml + '</span>';
+      if (isLineFolded) {
+        charIndex += lines[lineIdx].length + 1; // 跳过换行符
+        continue;
       }
-      lastProcessedIndex = currentRange.end;
+
+      var line = lines[lineIdx];
+      var lineStart = charIndex;
+      var lineEnd = lineStart + line.length;
+
+      // 行高亮：使用视觉行索引计算位置，确保在折叠时对齐
+      if (lineIdx === currentLineIndex) {
+        var lineHeightPx = EditorState.currentFontSize * 1.7;
+        resultHtml += '<span class="line-highlight" style="top:' + (visualLineIndex * lineHeightPx) + 'px;height:' + lineHeightPx + 'px;"></span>';
+      }
+      visualLineIndex++;
+
+      // 生成带语法高亮的行
+      var syntaxHtml = syntaxHighlightMainThread(line, language);
+      resultHtml += syntaxHtml + '\n';
+
+      charIndex = lineEnd + 1; // +1 for newline
     }
-    if (lastProcessedIndex < code.length) {
-      resultHtml += syntaxHighlightMainThread(code.substring(lastProcessedIndex), language);
-    }
-    return resultHtml + '\n';
+    return resultHtml;
   }
 
   // 防抖高亮更新（通过 requestAnimationFrame 节流）
@@ -1684,6 +1854,9 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     highlightRAFId = requestAnimationFrame(function() {
       highlightRAFId = null;
       if (!EditorState.highlightEnabled) {
+        // 高亮关闭时，仍然更新高亮层为纯文本显示，确保内容可见
+        updateLineNumbers();
+        updateCursorPosition();
         updateShadowHighlight(escapeHtml(codeEditor.value), EditorState.wordWrapEnabled);
         syncShadowScroll();
         return;
@@ -1704,7 +1877,9 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         }
       }
 
-      // 搜索高亮异步获取（避免主线程正则阻塞）
+      var currentLineIndex = codeEditor.value.substring(0, codeEditor.selectionStart).split('\n').length - 1;
+
+      // 搜索高亮异步获取
       if (replaceModalOverlay.classList.contains('open') && replaceFind.value) {
         getMatchRangesAsync(
           codeEditor.value,
@@ -1712,9 +1887,9 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
           replaceCaseSensitive.checked,
           replaceWholeWord.checked,
           replaceUseRegex.checked,
-          function(searchRanges) {
+          function(searchRanges, reason) {
             pendingSearchRanges = searchRanges;
-            var finalHTML = buildHighlightHTML(codeEditor.value, EditorState.currentLanguage, pendingSearchRanges, bracketRanges);
+            var finalHTML = buildHighlightHTML(codeEditor.value, EditorState.currentLanguage, pendingSearchRanges, bracketRanges, currentLineIndex);
             updateShadowHighlight(finalHTML, EditorState.wordWrapEnabled);
             syncShadowScroll();
           },
@@ -1722,7 +1897,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         );
       } else {
         pendingSearchRanges = [];
-        var finalHTML = buildHighlightHTML(codeEditor.value, EditorState.currentLanguage, [], bracketRanges);
+        var finalHTML = buildHighlightHTML(codeEditor.value, EditorState.currentLanguage, [], bracketRanges, currentLineIndex);
         updateShadowHighlight(finalHTML, EditorState.wordWrapEnabled);
         syncShadowScroll();
       }
@@ -1831,45 +2006,62 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     btnClear.disabled = (codeEditor.value === '');
   }
 
-  // ==================== 大文件高亮开关逻辑（增强版：支持字符长度阈值） ====================
-  function setHighlightEnabled(enabled) {
+  // ==================== 大文件高亮开关逻辑 ====================
+  function setHighlightEnabled(enabled, showModal = false) {
     EditorState.highlightEnabled = enabled;
     saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, enabled);
+    updateHighlightStatusIndicator(enabled);
+
     if (enabled) {
-      // 手动开启前再次检查行数和字符长度
-      var currentLineCount = codeEditor.value.split('\n').length;
-      var currentCharCount = codeEditor.value.length;
-      if ((currentLineCount > EditorState.largeFileThreshold || currentCharCount > EditorState.largeFileCharacterThreshold) && !EditorState.userForcedHighlight) {
-        showToast('⚠️ 文件过大，开启高亮可能影响性能，如需强制开启请再次点击', true);
-        EditorState.highlightEnabled = false;
-        saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, false);
-        return;
-      }
-      btnEnableHighlight.style.display = 'none';
-      btnDisableHighlight.style.display = 'inline-block';
-      largeFileWarning.style.display = 'none';
-      EditorState.userForcedHighlight = true;
+      largeFileModal.classList.remove('open');
       scheduleHighlightUpdate();
     } else {
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
-      EditorState.userForcedHighlight = false;
-      var codeLines = codeEditor.value.split('\n');
-      if (codeLines.length > EditorState.largeFileThreshold || codeEditor.value.length > EditorState.largeFileCharacterThreshold) {
-        largeFileWarning.style.display = 'block';
+      // 关闭高亮
+      if (showModal && !EditorState.userForcedHighlight) {
+        largeFileModal.classList.add('open');
       }
+      // 直接显示转义文本
       updateShadowHighlight(escapeHtml(codeEditor.value), EditorState.wordWrapEnabled);
       syncShadowScroll();
     }
   }
 
-  btnEnableHighlight.addEventListener('click', function() {
-    setHighlightEnabled(true);
-    showToast('✅ 实时高亮已开启');
+  function updateHighlightStatusIndicator(enabled) {
+    if (enabled) {
+      highlightIcon.textContent = '🔆';
+      highlightLabel.textContent = '高亮';
+      highlightStatus.style.color = 'var(--green)';
+    } else {
+      highlightIcon.textContent = '🌑';
+      highlightLabel.textContent = '高亮已关';
+      highlightStatus.style.color = 'var(--text-secondary)';
+    }
+  }
+
+  // 状态栏高亮开关点击
+  highlightStatus.addEventListener('click', function() {
+    const newState = !EditorState.highlightEnabled;
+    EditorState.userForcedHighlight = newState;
+    setHighlightEnabled(newState, false);
+    showToast(newState ? '高亮已开启' : '高亮已关闭');
   });
-  btnDisableHighlight.addEventListener('click', function() {
-    setHighlightEnabled(false);
-    showToast('实时高亮已关闭');
+
+  // 大文件弹窗按钮
+  btnEnableHighlightModal.addEventListener('click', function() {
+    EditorState.userForcedHighlight = true;
+    setHighlightEnabled(true, false);
+    largeFileModal.classList.remove('open');
+    showToast('已手动开启高亮，编辑大型文件时请注意性能');
+  });
+
+  btnDismissLargeFileModal.addEventListener('click', function() {
+    largeFileModal.classList.remove('open');
+  });
+
+  largeFileModal.addEventListener('click', function(event) {
+    if (event.target === largeFileModal) {
+      largeFileModal.classList.remove('open');
+    }
   });
 
   // ==================== 查找替换弹窗逻辑 ====================
@@ -1931,17 +2123,26 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   function updateMatchCount() {
     if (!replaceModalOverlay.classList.contains('open') || !replaceFind.value) {
       matchCountEl.textContent = '';
+      matchCountEl.style.color = '';
       return;
     }
-    // 异步获取匹配数（不卡界面）
     getMatchRangesAsync(
       codeEditor.value,
       replaceFind.value,
       replaceCaseSensitive.checked,
       replaceWholeWord.checked,
       replaceUseRegex.checked,
-      function(matches) {
-        matchCountEl.textContent = matches.length + ' 处匹配';
+      function(matches, reason) {
+        if (reason) {
+          matchCountEl.textContent = '⚠️ 正则不安全或超时';
+          matchCountEl.style.color = 'var(--red)';
+        } else if (matches.length === 0) {
+          matchCountEl.textContent = '0 处匹配';
+          matchCountEl.style.color = 'var(--text-secondary)';
+        } else {
+          matchCountEl.textContent = matches.length + ' 处匹配';
+          matchCountEl.style.color = 'var(--green)';
+        }
       },
       200
     );
@@ -1961,8 +2162,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var foundMatches = findMatchesSync();
     if (foundMatches.length === 0) {
       var regex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
-      if (!regex && replaceFind.value && replaceUseRegex.checked) {
-        showToast('⚠️ 正则表达式存在性能风险，请简化', true);
+      if (!regex && replaceFind.value) {
+        if (replaceUseRegex.checked && !isRegexSafe(replaceFind.value)) {
+          showToast('⚠️ 正则表达式存在性能风险，请简化', true);
+        } else {
+          showToast('未找到匹配项', true);
+        }
       } else {
         showToast('未找到匹配项', true);
       }
@@ -1996,8 +2201,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var foundMatches = findMatchesSync();
     if (foundMatches.length === 0) {
       var regex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
-      if (!regex && replaceFind.value && replaceUseRegex.checked) {
-        showToast('⚠️ 正则表达式存在性能风险，请简化', true);
+      if (!regex && replaceFind.value) {
+        if (replaceUseRegex.checked && !isRegexSafe(replaceFind.value)) {
+          showToast('⚠️ 正则表达式存在性能风险，请简化', true);
+        } else {
+          showToast('未找到匹配项', true);
+        }
       } else {
         showToast('未找到匹配项', true);
       }
@@ -2052,7 +2261,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     if (!confirm('确定要替换全部 ' + totalMatches + ' 处匹配吗？')) {
       return;
     }
-    var newCode = currentCode.replace(searchRegex, replaceWith.value);
+    // 使用函数替换，防止 $ 特殊模式被解析
+    var replacementText = replaceWith.value;
+    var newCode = currentCode.replace(searchRegex, function() {
+      return replacementText;
+    });
     executeCodeModification(function() {
       codeEditor.value = newCode;
     });
@@ -2348,11 +2561,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var newValue = this.value.substring(0, start) + pastedText + this.value.substring(end);
     // 大文件粘贴检测
     if (newValue.length > EditorState.largeFileCharacterThreshold && EditorState.highlightEnabled) {
-      setHighlightEnabled(false);
-      largeFileWarning.style.display = 'block';
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
-      showToast('检测到大文件粘贴，已自动关闭实时高亮', true);
+      setHighlightEnabled(false, true);
     }
 
     historyManager.pushState(codeEditor);
@@ -2580,7 +2789,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     EditorState.startHeight = modalRect.height;
     EditorState.startLeft = modalRect.left;
     EditorState.startTop = modalRect.top;
-    // 调整大小时隐藏溢出内容
     replaceModal.style.overflow = 'hidden';
     document.addEventListener('mousemove', onResize);
     document.addEventListener('mouseup', stopResize);
@@ -2613,7 +2821,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     EditorState.resizeDirection = null;
     document.removeEventListener('mousemove', onResize);
     document.removeEventListener('mouseup', stopResize);
-    // 恢复默认溢出显示
     replaceModal.style.overflow = '';
     var modalRect = replaceModal.getBoundingClientRect();
     saveToLocalStorage(STORAGE_KEYS.REPLACE_MODAL_SIZE, { width: modalRect.width, height: modalRect.height });
@@ -2863,16 +3070,25 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
   });
 
-  // ==================== 紧急保存（pagehide + visibilitychange + beforeunload） ====================
+  // ==================== 紧急保存（改进版：IndexedDB 异步写入带超时） ====================
   function emergencySave() {
-    if (EditorState.codeModified) {
-      const code = codeEditor.value;
-      try {
-        saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, code);
-      } catch (e) {}
-      try {
-        localStorage.setItem('editor-dirty-flag', '1');
-      } catch (e) {}
+    // 同步写入 localStorage，确保快速保留
+    const code = codeEditor.value;
+    try {
+      saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, code);
+      saveToLocalStorage(STORAGE_KEYS.DIRTY_FLAG, '1');
+    } catch (e) {}
+
+    // 尝试异步写入 IndexedDB（如果数据库已打开），最多等待 500ms
+    if (EditorState.autoSaveDB) {
+      const savePromise = saveCodeToIndexedDB(code);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 500));
+      Promise.race([savePromise, timeoutPromise]).then(() => {
+        // 成功保存，清除脏标志
+        saveToLocalStorage(STORAGE_KEYS.DIRTY_FLAG, '0');
+      }).catch(() => {
+        // 超时或失败，保留脏标志
+      });
     }
   }
 
@@ -2989,7 +3205,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     });
   }
 
-  // 打开弹窗时重新应用存储的高度
+  // 覆盖原 openReplaceModal 以在打开时重新应用存储的高度
   const originalOpenReplaceModal = openReplaceModal;
   openReplaceModal = function() {
     originalOpenReplaceModal();
@@ -3027,15 +3243,13 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     applyInitialFontSize();
     applyInitialWrap();
 
+    // 加载折叠状态
+    EditorState.foldedRanges = loadFromLocalStorage(STORAGE_KEYS.FOLDED_RANGES, []);
+    setupLineNumberClickHandler();
+
     EditorState.highlightEnabled = loadFromLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, true);
     EditorState.userForcedHighlight = false;
-    if (!EditorState.highlightEnabled) {
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
-    } else {
-      btnEnableHighlight.style.display = 'none';
-      btnDisableHighlight.style.display = 'inline-block';
-    }
+    updateHighlightStatusIndicator(EditorState.highlightEnabled);
 
     var wasRestored = await loadSavedCode();
     if (!wasRestored) {
@@ -3072,7 +3286,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
 
     codeEditor.focus();
     updateUndoRedoState();
-    console.log('%c🚀 专业版编辑器 v3.1.0 已就绪（强化稳定版）', 'color:#a3be8c;font-weight:bold;');
+    console.log('%c🚀 专业版编辑器 v3.2.0 已就绪（交互增强与性能优化版）', 'color:#a3be8c;font-weight:bold;');
   }
 
   initialize();
