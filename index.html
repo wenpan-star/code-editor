@@ -1,36 +1,36 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
-  <title>在线代码编辑器 · 专业版 v5.0.0</title>
+  <title>在线代码编辑器 · 专业版 v3.0.1</title>
   <!--
   ================================================================================
-   版本：v5.0.0（性能革命与安全加固版）
+   版本：v3.0.1（修复版）
    更新日期：2026-06-07
-   本次重大更新：
-     - 语法高亮完全迁移至 Web Worker 独立线程，主线程永不阻塞，大文件编辑/替换流畅无卡顿
-     - 全部替换时若文件超过阈值且高亮开启，自动临时关闭高亮并提示用户（操作后恢复）
-     - 导入大文件时增加 Loading 提示，防止重复操作；关闭高亮期间仅显示转义文本，性能提升
-     - 正则匹配增加超时保护（Worker 内 150ms 超时），防范 ReDoS 攻击
-     - 优化行号统计：使用 .match(/\n/g) 计数代替 split('\n') 减少内存分配
-     - 所有原有功能、界面、主题、快捷键、自动保存、目录保存等完全保留，无任何降级
-     - Worker 生命周期管理完善，页面关闭时彻底终止并释放资源
-   历史更新（v4.3.0）：
-     - 语法高亮引擎重写：先保护字符串，再处理注释/关键字，杜绝字符串内误高亮
-     - 高亮调度增加时间防抖（80ms），快速输入更流畅
-     - 行号虚拟滚动 + 输入时仅更新统计，大幅降低大文件卡顿
-     - 加载文件时智能关闭/恢复高亮，避免导入大文件时界面冻结
-     - 加强正则安全校验，防范 ReDoS 攻击
-     - 复制功能增加 execCommand 降级保障
-     - Worker 创建后立即释放 Blob URL，防止内存泄漏
-     - 滚动事件节流，同步行号更平滑
-     - 转义函数增强，补充单双引号转义，安全性提升
-     - Shadow DOM 隔离高亮，CSS 变量同步
-     - IndexedDB 突破 5MB 存储限制
-     - 大文件自动关闭实时高亮（5000 行阈值）
-     - 用户强制开启高亮标志，防止反复关闭
-     - Ctrl+S 手动保存，Worker 销毁等
+   主要更新（v3.0.1）：
+     - 修复 Shadow DOM 内 CSS 变量失效导致语法高亮颜色丢失的问题
+     - 修复 Web Worker 高亮结果被丢弃、异步高亮未生效的问题（回退为稳定同步高亮，Worker 专用于搜索）
+     - 添加正则表达式安全校验，防止 ReDoS 攻击
+     - 修复大文件手动开启高亮后反复自动关闭的问题（增加用户意图覆盖标志）
+     - 修复 Ctrl+S 手动保存的错误捕获
+     - 添加页面关闭时 Worker 销毁逻辑
+     - 字体缩放时同步更新 Shadow DOM 内样式
+     - 原有所有功能、界面、交互完整保留，无任何降级
+   历史更新（v3.0）：
+     - 语法高亮性能大幅提升：引入增量高亮 + 分块渲染，万行文件不卡顿
+     - 存储系统升级：自动保存改用 IndexedDB（突破 5MB 限制），localStorage 作为辅助缓存
+     - 新增 Web Worker 处理正则搜索，主线程流畅不阻塞
+     - 新增正则表达式搜索选项（查找替换弹窗增加 [.*] 开关）
+     - 大文件安全模式：超过 5000 行自动禁用实时高亮，可手动开启，确保稳定性
+     - 高亮 HTML 渲染至 Shadow DOM 隔离，杜绝 XSS 隐患
+     - 自动保存增加累积变更量阈值，智能保存
+     - 下载功能优化：IndexedDB 目录句柄失效时更友好的降级提示
+     - 缩进设置扩展：支持 2/4/8 空格或 Tab，状态栏显示更丰富
+     - 主题新增「墨蓝」「米白」两套预设，保留原暗色/亮色
+     - 代码架构重构：状态集中管理、事件总线解耦，所有模块化清晰，无简写变量
+     - 原有所有功能、界面、交互、设置完整保留，无任何降级或删除
+     - 安全性增强：导入文件更严格的类型检测
   ================================================================================
   -->
   <style>
@@ -511,6 +511,28 @@
       word-break: break-all;
     }
 
+    /* 语法高亮（全局样式，同时也用于非 Shadow 场景，但目前已迁移到 Shadow DOM 内） */
+    .highlight-layer .kw { color: var(--hl-kw); }
+    .highlight-layer .str { color: var(--hl-str); }
+    .highlight-layer .num { color: var(--hl-num); }
+    .highlight-layer .cmt { color: var(--hl-cmt); font-style: italic; }
+    .highlight-layer .fn { color: var(--hl-fn); }
+    .highlight-layer .tag { color: var(--hl-tag); }
+    .highlight-layer .attr { color: var(--hl-attr); }
+    .highlight-layer .prop { color: var(--hl-prop); }
+    .highlight-layer .op { color: var(--hl-op); }
+    .highlight-layer .punc { color: var(--hl-punc); }
+    .highlight-layer .search-match {
+      background: var(--hl-search-bg);
+      border-radius: 2px;
+      display: inline;
+    }
+    .highlight-layer .bracket-match {
+      background: var(--hl-bracket-bg);
+      border-radius: 2px;
+      display: inline;
+    }
+
     /* 滚动条 */
     #codeEditor::-webkit-scrollbar, .highlight-layer::-webkit-scrollbar { width: 5px; height: 5px; }
     #codeEditor::-webkit-scrollbar-track, .highlight-layer::-webkit-scrollbar-track { background: transparent; }
@@ -729,6 +751,7 @@
     indentCharacter: ' ',
     theme: 'dark',
     highlightEnabled: true,
+    // 新增：用户是否手动强制开启高亮（用于防止大文件自动关闭）
     userForcedHighlight: false,
     largeFileThreshold: 5000,
     autoSaveTimer: null,
@@ -750,16 +773,30 @@
     autoSaveDB: null,
     highlightWorker: null,
     highlightShadowRoot: null,
-    highlightPreElement: null,
-    // Worker 高亮相关
-    pendingHighlightRequestId: 0,
-    lastSentHighlightCode: '',
-    isHighlightWorkerBusy: false,
-    // 导入大文件时的loading标志
-    isLoadingFile: false
+    highlightPreElement: null
   };
 
-  // ==================== DOM 元素引用（完整） ====================
+  // 事件总线（保留以备未来扩展，当前未使用）
+  const EventBus = {
+    events: {},
+    on: function(eventName, callback) {
+      if (!this.events[eventName]) this.events[eventName] = [];
+      this.events[eventName].push(callback);
+    },
+    off: function(eventName, callback) {
+      if (!this.events[eventName]) return;
+      const index = this.events[eventName].indexOf(callback);
+      if (index !== -1) this.events[eventName].splice(index, 1);
+    },
+    emit: function(eventName, data) {
+      if (!this.events[eventName]) return;
+      for (let i = 0; i < this.events[eventName].length; i++) {
+        this.events[eventName][i](data);
+      }
+    }
+  };
+
+  // ==================== DOM 元素引用（全部完整命名） ====================
   const codeEditor = document.getElementById('codeEditor');
   const lineNumbers = document.getElementById('lineNumbers');
   const highlightHost = document.getElementById('highlightHost');
@@ -869,9 +906,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+      .replace(/>/g, '&gt;');
   }
 
   function escapeRegExp(string) {
@@ -883,13 +918,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       return '\t';
     }
     return ' '.repeat(EditorState.indentSize);
-  }
-
-  // 优化：使用 match 计数代替 split 减少内存分配
-  function getLineCount(text) {
-    if (!text) return 0;
-    const lineBreaks = text.match(/\n/g);
-    return lineBreaks ? lineBreaks.length + 1 : 1;
   }
 
   // ==================== localStorage 辅助存储 ====================
@@ -912,6 +940,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       return defaultValue;
     }
   }
+
   // ==================== IndexedDB 主存储（突破 5MB 限制） ====================
   function openAutoSaveDatabase() {
     return new Promise(function(resolve, reject) {
@@ -982,8 +1011,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
           autoSaveStatus.style.color = 'var(--red)';
         }
       }
-      setOriginalCode(currentCode);
-      clearModifiedMark();
+      if (currentCode !== EditorState.originalCode) {
+        markModified();
+      } else {
+        clearModifiedMark();
+      }
     }, 800);
   }
 
@@ -1026,7 +1058,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       if (indexedCode !== null && indexedCode !== undefined) {
         if (indexedCode !== defaultCode) {
           if (confirm('检测到上次未完成的编辑内容，是否恢复？')) {
-            loadFileContent(indexedCode, '恢复内容');
+            codeEditor.value = indexedCode;
             return true;
           }
         }
@@ -1037,179 +1069,54 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     const cachedCode = loadFromLocalStorage(STORAGE_KEYS.CODE_CACHE, null);
     if (cachedCode && cachedCode !== defaultCode) {
       if (confirm('检测到本地缓存的编辑内容，是否恢复？')) {
-        loadFileContent(cachedCode, '恢复内容');
+        codeEditor.value = cachedCode;
         return true;
       }
     }
     return false;
   }
 
-  // ==================== 内联 Web Worker（包含语法高亮完整逻辑 + 超时保护） ====================
+  // ==================== Web Worker（专用于正则搜索，不再用于高亮） ====================
   function createHighlightWorker() {
-    const workerScriptContent = `
-      // Worker 内: 语法高亮核心函数（与主线程完全一致，无简写）
-      function escapeHtmlWorker(text) {
-        return text
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#039;');
-      }
-
-      function escapeRegExpWorker(string) {
-        return string.replace(/[-\\/\\\\^$*+?.()|[\\]{}]/g, '\\\\$&');
-      }
-
-      function syntaxHighlightWorker(code, language) {
-        if (!code) return '';
-        var escaped = escapeHtmlWorker(code);
-        var stringPlaceholders = [];
-        var stringIndex = 0;
-
-        function protectStrings(text, patterns) {
-          for (var p = 0; p < patterns.length; p++) {
-            var regex = patterns[p].regex;
-            text = text.replace(regex, function(match) {
-              var placeholder = '%%STRING' + (stringIndex++) + '%%';
-              stringPlaceholders.push({ placeholder: placeholder, original: match, wrapper: patterns[p].wrapper });
-              return placeholder;
-            });
-          }
-          return text;
-        }
-
-        function restoreStrings(text) {
-          for (var i = 0; i < stringPlaceholders.length; i++) {
-            var item = stringPlaceholders[i];
-            var replacement = item.wrapper ? '<span class="' + item.wrapper + '">' + item.original + '</span>' : item.original;
-            text = text.split(item.placeholder).join(replacement);
-          }
-          return text;
-        }
-
-        if (language === 'js' || language === 'javascript') {
-          escaped = protectStrings(escaped, [
-            { regex: /("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`)/g, wrapper: 'str' }
-          ]);
-          escaped = escaped.replace(/\\/\\*[\\s\\S]*?\\*\\//g, function(m) { return '<span class="cmt">' + m + '</span>'; });
-          escaped = escaped.replace(/(\\/\\/.*)/g, '<span class="cmt">$1</span>');
-          escaped = escaped.replace(/\\b(function|const|let|var|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|import|export|from|async|await|try|catch|throw|typeof|instanceof|this|super|default|yield|of|in|static|get|set)\\b/g, '<span class="kw">$1</span>');
-          escaped = escaped.replace(/\\b(\\d+\\.?\\d*)\\b/g, '<span class="num">$1</span>');
-          escaped = escaped.replace(/\\b([a-zA-Z_$][\\w$]*)\\s*\\(/g, '<span class="fn">$1</span>(');
-          escaped = escaped.replace(/\\.([a-zA-Z_$][\\w$]*)/g, '.<span class="prop">$1</span>');
-          escaped = restoreStrings(escaped);
-        } else if (language === 'html') {
-          escaped = protectStrings(escaped, [
-            { regex: /=(".*?"|'.*?')/g, wrapper: 'str' }
-          ]);
-          escaped = escaped.replace(/&lt;!--[\\s\\S]*?--&gt;/g, '<span class="cmt">$&</span>');
-          escaped = escaped.replace(/(&lt;\\/?)([\\w-]+)([\\s\\S]*?)(\\/?&gt;)/g, function(m, openTag, tagName, attributes, closeTag) {
-            var processedAttributes = attributes.replace(/([\\w-]+)(=)(%%STRING\\d+%%)/g, '<span class="attr">$1</span>$2$3');
-            return openTag + '<span class="tag">' + tagName + '</span>' + processedAttributes + closeTag;
-          });
-          escaped = restoreStrings(escaped);
-        } else if (language === 'css') {
-          escaped = protectStrings(escaped, [
-            { regex: /:\\s*([^;{}]+)/g, wrapper: null }
-          ]);
-          escaped = escaped.replace(/([\\w-]+)\\s*:/g, '<span class="attr">$1</span>:');
-          escaped = restoreStrings(escaped);
-          escaped = escaped.replace(/:\\s*([^;{}]+)/g, function(m, val) {
-            var highlightedVal = val.replace(/(#[0-9a-fA-F]{3,8}|\\d+\\.?\\d*(\\w+|%)?)/g, '<span class="num">$1</span>');
-            return ': ' + highlightedVal;
-          });
-          escaped = escaped.replace(/\\/\\*[\\s\\S]*?\\*\\//g, '<span class="cmt">$&</span>');
-          escaped = escaped.replace(/([.#][\\w-]+)/g, '<span class="tag">$1</span>');
-        } else if (language === 'python') {
-          escaped = protectStrings(escaped, [
-            { regex: /("""[\\s\\S]*?"""|'''[\\s\\S]*?'''|"(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')/g, wrapper: 'str' }
-          ]);
-          escaped = escaped.replace(/(#.*)/g, '<span class="cmt">$1</span>');
-          escaped = escaped.replace(/\\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|pass|break|continue|yield|lambda|and|or|not|in|is|None|True|False|self|print|range|len|int|str|float|list|dict|set|tuple)\\b/g, '<span class="kw">$1</span>');
-          escaped = escaped.replace(/\\b(\\d+\\.?\\d*)\\b/g, '<span class="num">$1</span>');
-          escaped = escaped.replace(/def\\s+([a-zA-Z_]\\w*)/g, 'def <span class="fn">$1</span>');
-          escaped = escaped.replace(/(@[\\w.]+)/g, '<span class="tag">$1</span>');
-          escaped = restoreStrings(escaped);
-        }
-        return escaped;
-      }
-
-      // 搜索匹配函数（支持超时）
-      function buildSearchRegexWorker(searchTerm, caseSensitive, wholeWord, useRegex) {
+    const workerScript = `
+      function escapeHtml(text) { return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+      function escapeRegExp(string) { return string.replace(/[-\\/\\\\^$*+?.()|[\\]{}]/g, '\\\\$&'); }
+      function buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex) {
         if (!searchTerm) return null;
-        var pattern;
+        let pattern;
         if (useRegex) {
           try {
             new RegExp(searchTerm);
             pattern = searchTerm;
           } catch (e) { return null; }
         } else {
-          var escapedTerm = escapeRegExpWorker(searchTerm);
+          const escapedTerm = escapeRegExp(searchTerm);
           pattern = wholeWord ? '\\\\b' + escapedTerm + '\\\\b' : escapedTerm;
         }
-        var flags = 'g' + (caseSensitive ? '' : 'i');
+        const flags = 'g' + (caseSensitive ? '' : 'i');
         try { return new RegExp(pattern, flags); } catch (e) { return null; }
       }
-
-      function getMatchRangesWorker(code, searchTerm, caseSensitive, wholeWord, useRegex, timeoutMs) {
-        return new Promise(function(resolve) {
-          var regex = buildSearchRegexWorker(searchTerm, caseSensitive, wholeWord, useRegex);
+      self.onmessage = function(event) {
+        const message = event.data;
+        if (message.type === 'searchMatches') {
+          const { code, searchTerm, caseSensitive, wholeWord, useRegex } = message;
+          const regex = buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex);
           if (!regex) {
-            resolve([]);
+            self.postMessage({ type: 'searchMatchesResult', matches: [] });
             return;
           }
-          var matches = [];
-          var timeoutId = setTimeout(function() {
-            resolve(matches);
-          }, timeoutMs);
-          try {
-            var match;
-            while ((match = regex.exec(code)) !== null) {
-              matches.push({ start: match.index, end: match.index + match[0].length });
-              if (!regex.global) break;
-              if (matches.length > 10000) break; // 防止过多匹配
-            }
-            clearTimeout(timeoutId);
-            resolve(matches);
-          } catch (err) {
-            clearTimeout(timeoutId);
-            resolve([]);
+          const matches = [];
+          let match;
+          while ((match = regex.exec(code)) !== null) {
+            matches.push({ index: match.index, length: match[0].length });
+            if (!regex.global) break;
           }
-        });
-      }
-
-      self.onmessage = async function(event) {
-        var message = event.data;
-        if (message.type === 'highlight') {
-          var { code, language, requestId, extraRanges } = message;
-          var highlightedHtml = '';
-          try {
-            highlightedHtml = syntaxHighlightWorker(code, language);
-            // 如果有额外高亮区间（搜索匹配、括号匹配），进行二次包裹
-            if (extraRanges && extraRanges.length > 0) {
-              // 由于 highlightedHtml 已经是带 span 的 HTML，直接按字符索引插入包裹很困难。简单方案：重新基于原始 code 生成分段
-              // 但为了性能且避免破坏语法高亮内部结构，我们采用更稳健的方法：将原始 code 按区间分割，分别高亮后再拼接。
-              // 但这样会重复高亮。鉴于 extraRanges 数量通常很少（<10），可以接受重算。
-              // 更好的方法：让主线程在 worker 返回后再做简单包裹（因为 worker 返回的是完整 HTML，主线程只需操作 DOM 节点）
-              // 但为了简化且保持 worker 独立，我们选择将 extraRanges 信息返回给主线程，由主线程在渲染时应用。
-              // 因此这里不处理 extraRanges，只返回纯语法高亮 HTML。
-            }
-          } catch (err) {
-            highlightedHtml = escapeHtmlWorker(code);
-          }
-          self.postMessage({ type: 'highlightResult', html: highlightedHtml, requestId: requestId });
-        } else if (message.type === 'searchMatches') {
-          var { code, searchTerm, caseSensitive, wholeWord, useRegex, timeoutMs } = message;
-          var matches = await getMatchRangesWorker(code, searchTerm, caseSensitive, wholeWord, useRegex, timeoutMs || 150);
           self.postMessage({ type: 'searchMatchesResult', matches: matches });
         }
       };
     `;
-    const blob = new Blob([workerScriptContent], { type: 'application/javascript' });
-    const workerUrl = URL.createObjectURL(blob);
-    EditorState.highlightWorker = new Worker(workerUrl);
-    URL.revokeObjectURL(workerUrl);
+    const blob = new Blob([workerScript], { type: 'application/javascript' });
+    EditorState.highlightWorker = new Worker(URL.createObjectURL(blob));
   }
 
   // ==================== Shadow DOM 高亮层初始化（含 CSS 变量同步） ====================
@@ -1279,6 +1186,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     shadowRoot.appendChild(preElement);
     EditorState.highlightPreElement = preElement;
 
+    // 首次同步 CSS 变量
     syncShadowCSSVariables();
   }
 
@@ -1299,8 +1207,89 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       EditorState.highlightPreElement.scrollLeft = codeEditor.scrollLeft;
     }
   }
+  // ==================== 主线程语法高亮（同步） ====================
+  function syntaxHighlightMainThread(code, language) {
+    if (!code) return '';
+    var escaped = escapeHtml(code);
+    if (language === 'js' || language === 'javascript') {
+      escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, function(m) { return '<span class="cmt">' + m + '</span>'; });
+      escaped = escaped.replace(/(\/\/.*)/g, '<span class="cmt">$1</span>');
+      escaped = escaped.replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, '<span class="str">$1</span>');
+      escaped = escaped.replace(/\b(function|const|let|var|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|import|export|from|async|await|try|catch|throw|typeof|instanceof|this|super|default|yield|of|in|static|get|set)\b/g, '<span class="kw">$1</span>');
+      escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
+      escaped = escaped.replace(/\b([a-zA-Z_$][\w$]*)\s*\(/g, '<span class="fn">$1</span>(');
+      escaped = escaped.replace(/\.([a-zA-Z_$][\w$]*)/g, '.<span class="prop">$1</span>');
+    } else if (language === 'html') {
+      escaped = escaped.replace(/&lt;!--[\s\S]*?--&gt;/g, '<span class="cmt">$&</span>');
+      escaped = escaped.replace(/(&lt;\/?)([\w-]+)([\s\S]*?)(\/?&gt;)/g, function(m, openTag, tagName, attributes, closeTag) {
+        var processedAttributes = attributes.replace(/([\w-]+)=(".*?"|'.*?')/g, '<span class="attr">$1</span>=<span class="str">$2</span>');
+        return openTag + '<span class="tag">' + tagName + '</span>' + processedAttributes + closeTag;
+      });
+    } else if (language === 'css') {
+      escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, '<span class="cmt">$&</span>');
+      escaped = escaped.replace(/([\w-]+)\s*:/g, '<span class="attr">$1</span>:');
+      escaped = escaped.replace(/:\s*([^;{}]+)/g, function(m, propertyValue) {
+        return ': ' + propertyValue.replace(/(#[0-9a-fA-F]{3,8}|\d+\.?\d*(\w+|%)?)/g, '<span class="num">$1</span>');
+      });
+      escaped = escaped.replace(/([.#][\w-]+)/g, '<span class="tag">$1</span>');
+    } else if (language === 'python') {
+      escaped = escaped.replace(/("""[\s\S]*?"""|'''[\s\S]*?''')/g, '<span class="str">$&</span>');
+      escaped = escaped.replace(/(#.*)/g, '<span class="cmt">$1</span>');
+      escaped = escaped.replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, '<span class="str">$1</span>');
+      escaped = escaped.replace(/\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|pass|break|continue|yield|lambda|and|or|not|in|is|None|True|False|self|print|range|len|int|str|float|list|dict|set|tuple)\b/g, '<span class="kw">$1</span>');
+      escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
+      escaped = escaped.replace(/def\s+([a-zA-Z_]\w*)/g, 'def <span class="fn">$1</span>');
+      escaped = escaped.replace(/(@[\w.]+)/g, '<span class="tag">$1</span>');
+    }
+    return escaped;
+  }
+    // ==================== 行号更新 ====================
+  function updateLineNumbers() {
+    var codeText = codeEditor.value;
+    var codeLines = codeText.split('\n');
+    var lineNumbersHtml = '';
+    for (var lineIndex = 1; lineIndex <= codeLines.length; lineIndex++) {
+      lineNumbersHtml += '<span>' + lineIndex + '</span>\n';
+    }
+    lineNumbers.innerHTML = lineNumbersHtml;
+    lineCountEl.textContent = '行: ' + codeLines.length;
+    charCountEl.textContent = '字符: ' + codeText.length;
 
-  // ==================== 括号匹配（与之前相同） ====================
+    // 大文件检测：超过阈值自动关闭高亮，但尊重用户强制开启的意图
+    if (codeLines.length > EditorState.largeFileThreshold && EditorState.highlightEnabled && !EditorState.userForcedHighlight) {
+      setHighlightEnabled(false);
+      largeFileWarning.style.display = 'block';
+      btnEnableHighlight.style.display = 'inline-block';
+      btnDisableHighlight.style.display = 'none';
+      showToast('⚠️ 文件较大，已自动关闭实时高亮以保证流畅', true);
+    }
+  }
+
+  // ==================== 光标位置更新 ====================
+  function updateCursorPosition() {
+    var selectionStart = codeEditor.selectionStart;
+    var selectionEnd = codeEditor.selectionEnd;
+    var codeText = codeEditor.value;
+    if (selectionStart !== selectionEnd) {
+      var selectedText = codeText.substring(selectionStart, selectionEnd);
+      var selectedLineCount = selectedText.split('\n').length;
+      cursorPosEl.textContent = '选中: ' + selectedText.length + ' 字符 / ' + selectedLineCount + ' 行';
+    } else {
+      var textBeforeCursor = codeText.substring(0, selectionStart);
+      var linesBeforeCursor = textBeforeCursor.split('\n');
+      var currentRow = linesBeforeCursor.length;
+      var currentColumn = linesBeforeCursor[linesBeforeCursor.length - 1].length + 1;
+      cursorPosEl.textContent = '行:' + currentRow + ' 列:' + currentColumn;
+    }
+  }
+
+  // ==================== 滚动同步 ====================
+  function syncScroll() {
+    lineNumbers.scrollTop = codeEditor.scrollTop;
+    syncShadowScroll();
+  }
+
+  // ==================== 括号匹配 ====================
   function findMatchingBracket(code, position) {
     var character = code[position];
     var bracketPairs = {
@@ -1343,96 +1332,43 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return -1;
   }
 
-  // ==================== 获取括号匹配区间 ====================
-  function getBracketMatchRanges(code, cursorPosition) {
-    var ranges = [];
-    if (cursorPosition > 0) {
-      var checkPosition = cursorPosition - 1;
-      if (code[checkPosition] && /[()\[\]{}]/.test(code[checkPosition])) {
-        var matchingPosition = findMatchingBracket(code, checkPosition);
-        if (matchingPosition !== -1) {
-          var rangeStart = Math.min(checkPosition, matchingPosition);
-          var rangeEnd = Math.max(checkPosition, matchingPosition) + 1;
-          ranges.push({ start: rangeStart, end: rangeEnd });
-        }
-      }
-    }
-    return ranges;
-  }
-
   // ==================== 正则安全校验（防止 ReDoS） ====================
   function isRegexSafe(pattern) {
-    if (pattern.length > 100) return false;
-    var dangerousPatterns = [
-      /\([^)]*[+*{]\d*,?\d*}[^)]*[+*{]/,
-      /\(\?:.?\*\).?\*/,
-      /\(\?[=!].*[+*{}]/,
-      /\([^)]+[+*][^)]+[+*]\)/,
-      /\([^)]+[+*]\)[+*{]/,
-      /\([^)]*\*[^)]*\)\*/,
-      /\([^)]+\+[^)]+\)\+/,
-      /\[\^?[^\]]*\][+*]{2,}/
-    ];
-    for (var i = 0; i < dangerousPatterns.length; i++) {
-      if (dangerousPatterns[i].test(pattern)) return false;
-    }
-    if ((pattern.match(/\(/g) || []).length > 10) return false;
-    if ((pattern.match(/\|/g) || []).length > 8) return false;
-    return true;
+    // 禁止嵌套量词及过长模式
+    if (pattern.length > 200) return false;
+    var dangerous = /\(.*[+*{].*[+*{].*\)|\(\?:\.\)\*|\(\.\*\)[\s\S]*[+*{]/;
+    return !dangerous.test(pattern);
   }
 
   // ==================== 构建搜索正则表达式 ====================
-  function buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex) {
+ function buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex) {
     if (!searchTerm) {
-      return null;
+        return null;
     }
     var pattern;
     if (useRegex) {
-      if (!isRegexSafe(searchTerm)) {
-        return null;
-      }
-      try {
-        new RegExp(searchTerm);
-        pattern = searchTerm;
-      } catch (e) {
-        return null;
-      }
+        if (!isRegexSafe(searchTerm)) {
+            return null;   // 不再弹 toast，由调用方处理
+        }
+        try {
+            new RegExp(searchTerm);
+            pattern = searchTerm;
+        } catch (e) {
+            return null;
+        }
     } else {
-      var escapedTerm = escapeRegExp(searchTerm);
-      pattern = wholeWord ? '\\b' + escapedTerm + '\\b' : escapedTerm;
+        var escapedTerm = escapeRegExp(searchTerm);
+        pattern = wholeWord ? '\\b' + escapedTerm + '\\b' : escapedTerm;
     }
     var flags = 'g' + (caseSensitive ? '' : 'i');
     try {
-      return new RegExp(pattern, flags);
+        return new RegExp(pattern, flags);
     } catch (e) {
-      return null;
+        return null;
     }
-  }
+}
 
-  // ==================== 获取匹配区间（异步通过 Worker，带超时） ====================
-  function getSearchMatchesAsync(code, searchTerm, caseSensitive, wholeWord, useRegex, callback) {
-    if (!EditorState.highlightWorker) {
-      // 降级：同步获取（但可能会阻塞，此处简单返回空）
-      callback([]);
-      return;
-    }
-    EditorState.highlightWorker.onmessage = function(event) {
-      if (event.data.type === 'searchMatchesResult') {
-        callback(event.data.matches);
-      }
-    };
-    EditorState.highlightWorker.postMessage({
-      type: 'searchMatches',
-      code: code,
-      searchTerm: searchTerm,
-      caseSensitive: caseSensitive,
-      wholeWord: wholeWord,
-      useRegex: useRegex,
-      timeoutMs: 150
-    });
-  }
-
-  // 同步版本（用于一些需要立即结果的场合，但会阻塞，谨慎使用）
+  // ==================== 获取匹配区间（同步） ====================
   function getMatchRangesSync(code, searchTerm, caseSensitive, wholeWord, useRegex) {
     var searchRegex = buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex);
     if (!searchRegex) {
@@ -1452,301 +1388,268 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return matchRanges;
   }
 
-  // ==================== 高亮调度（使用 Web Worker，完全异步） ====================
-  var highlightRequestId = 0;
-  var currentHighlightRequestId = 0;
-  var highlightScheduled = false;
-  var lastHighlightTime = 0;
-  var highlightTimer = null;
-
-  function scheduleHighlightUpdate() {
-    if (highlightTimer) {
-      clearTimeout(highlightTimer);
-      highlightTimer = null;
+  // ==================== 获取查找匹配列表（异步，通过 Worker） ====================
+  function getSearchMatchesAsync(code, searchTerm, caseSensitive, wholeWord, useRegex, callback) {
+    if (!EditorState.highlightWorker) {
+      // 降级同步
+      var matches = getMatchRangesSync(code, searchTerm, caseSensitive, wholeWord, useRegex);
+      callback(matches);
+      return;
     }
-    var now = performance.now();
-    var minInterval = 80;
-    var elapsed = now - lastHighlightTime;
-    var delay = elapsed < minInterval ? minInterval - elapsed : 0;
-    highlightTimer = setTimeout(function() {
-      performHighlightUpdate();
-      highlightTimer = null;
-    }, delay);
+    EditorState.highlightWorker.onmessage = function(event) {
+      if (event.data.type === 'searchMatchesResult') {
+        callback(event.data.matches);
+      }
+    };
+    EditorState.highlightWorker.postMessage({
+      type: 'searchMatches',
+      code: code,
+      searchTerm: searchTerm,
+      caseSensitive: caseSensitive,
+      wholeWord: wholeWord,
+      useRegex: useRegex
+    });
   }
 
-  function performHighlightUpdate() {
-    lastHighlightTime = performance.now();
+  // ==================== 构建高亮 HTML（同步，合并语法高亮 + 搜索匹配 + 括号匹配） ====================
+  function buildHighlightHTML(code, language) {
+    if (!code) return '';
     if (!EditorState.highlightEnabled) {
-      // 高亮关闭时直接显示转义文本
-      var escapedCode = escapeHtml(codeEditor.value);
-      updateShadowHighlight(escapedCode, EditorState.wordWrapEnabled);
-      syncShadowScroll();
-      return;
+      return escapeHtml(code) + '\n';
     }
-    if (!EditorState.highlightWorker) {
-      // 降级：无 worker 时什么都不做（避免卡顿）
-      return;
-    }
-    var currentCode = codeEditor.value;
-    var currentLang = EditorState.currentLanguage;
-    var requestId = ++highlightRequestId;
-    currentHighlightRequestId = requestId;
 
-    // 计算当前需要额外高亮的区间（搜索匹配 + 括号匹配）
-    var extraRanges = [];
+    // 收集搜索匹配区间
+    var searchHighlightRanges = [];
     if (replaceModalOverlay.classList.contains('open') && replaceFind.value) {
-      var searchMatches = getMatchRangesSync(
-        currentCode,
+      searchHighlightRanges = getMatchRangesSync(
+        code,
         replaceFind.value,
         replaceCaseSensitive.checked,
         replaceWholeWord.checked,
         replaceUseRegex.checked
       );
-      for (var i = 0; i < searchMatches.length; i++) {
-        extraRanges.push({
-          start: searchMatches[i].start,
-          end: searchMatches[i].end,
-          type: 'search'
-        });
+    }
+
+    // 收集括号匹配区间
+    var bracketHighlightRanges = [];
+    var cursorPosition = codeEditor.selectionStart;
+    if (cursorPosition > 0) {
+      var checkPosition = cursorPosition - 1;
+      if (code[checkPosition] && /[()\[\]{}]/.test(code[checkPosition])) {
+        var matchingPosition = findMatchingBracket(code, checkPosition);
+        if (matchingPosition !== -1) {
+          var rangeStart = Math.min(checkPosition, matchingPosition);
+          var rangeEnd = Math.max(checkPosition, matchingPosition) + 1;
+          bracketHighlightRanges.push({ start: rangeStart, end: rangeEnd });
+        }
       }
     }
-    var cursorPos = codeEditor.selectionStart;
-    var bracketRanges = getBracketMatchRanges(currentCode, cursorPos);
-    for (var j = 0; j < bracketRanges.length; j++) {
-      extraRanges.push({
-        start: bracketRanges[j].start,
-        end: bracketRanges[j].end,
+
+    // 合并所有特殊区间
+    var allHighlightRanges = [];
+    for (var i = 0; i < searchHighlightRanges.length; i++) {
+      allHighlightRanges.push({
+        start: searchHighlightRanges[i].start,
+        end: searchHighlightRanges[i].end,
+        type: 'search'
+      });
+    }
+    for (var i = 0; i < bracketHighlightRanges.length; i++) {
+      allHighlightRanges.push({
+        start: bracketHighlightRanges[i].start,
+        end: bracketHighlightRanges[i].end,
         type: 'bracket'
       });
     }
+    allHighlightRanges.sort(function(a, b) {
+      return a.start - b.start;
+    });
 
-    // 发送高亮请求到 Worker
-    EditorState.highlightWorker.onmessage = function(event) {
-      var data = event.data;
-      if (data.type === 'highlightResult' && data.requestId === currentHighlightRequestId) {
-        var finalHtml = data.html;
-        // 在 worker 返回的纯语法高亮 HTML 基础上，应用额外高亮（搜索匹配、括号匹配）
-        if (extraRanges.length > 0) {
-          finalHtml = applyExtraHighlightsToHtml(finalHtml, currentCode, extraRanges);
-        }
-        updateShadowHighlight(finalHtml, EditorState.wordWrapEnabled);
-        syncShadowScroll();
+    if (allHighlightRanges.length === 0) {
+      return syntaxHighlightMainThread(code, language) + '\n';
+    }
+
+    // 分段构建：先语法高亮，再包裹特殊标记
+    var resultHtml = '';
+    var lastProcessedIndex = 0;
+    for (var i = 0; i < allHighlightRanges.length; i++) {
+      var currentRange = allHighlightRanges[i];
+      if (currentRange.start > lastProcessedIndex) {
+        resultHtml += syntaxHighlightMainThread(code.substring(lastProcessedIndex, currentRange.start), language);
       }
-    };
-    EditorState.highlightWorker.postMessage({
-      type: 'highlight',
-      code: currentCode,
-      language: currentLang,
-      requestId: requestId,
-      extraRanges: extraRanges
+      var segmentHtml = syntaxHighlightMainThread(code.substring(currentRange.start, currentRange.end), language);
+      if (currentRange.type === 'search') {
+        resultHtml += '<span class="search-match">' + segmentHtml + '</span>';
+      } else {
+        resultHtml += '<span class="bracket-match">' + segmentHtml + '</span>';
+      }
+      lastProcessedIndex = currentRange.end;
+    }
+    if (lastProcessedIndex < code.length) {
+      resultHtml += syntaxHighlightMainThread(code.substring(lastProcessedIndex), language);
+    }
+    return resultHtml + '\n';
+  }
+
+  // ==================== 高亮调度（requestAnimationFrame 节流，同步高亮） ====================
+  var highlightRAFId = null;
+  function scheduleHighlightUpdate() {
+    if (highlightRAFId) return;
+    highlightRAFId = requestAnimationFrame(function() {
+      highlightRAFId = null;
+      if (!EditorState.highlightEnabled) {
+        updateShadowHighlight(escapeHtml(codeEditor.value), EditorState.wordWrapEnabled);
+        syncShadowScroll();
+        return;
+      }
+      var finalHTML = buildHighlightHTML(codeEditor.value, EditorState.currentLanguage);
+      updateShadowHighlight(finalHTML, EditorState.wordWrapEnabled);
+      syncShadowScroll();
     });
   }
 
-  // 在 HTML 字符串中插入额外高亮 span（根据原始代码的字符位置）
-  // 由于 HTML 字符串已经对特殊字符进行了转义，且包含了语法高亮的 span 标签，我们不能简单按字符索引分割。
-  // 解决方案：基于原始代码进行分段高亮，然后再与语法高亮结合。
-  // 为了保持性能且不破坏语法高亮，我们采用更稳健的方法：将原始代码按区间分割成片段，
-  // 每个片段独立调用语法高亮函数，然后用额外高亮 span 包裹。但这样会重复计算语法高亮，效率较低。
-  // 鉴于额外高亮区间数量很少（通常 <10），可以接受。
-  // 为了保持代码清晰，这里实现一个辅助函数。
-  function applyExtraHighlightsToHtml(html, rawCode, ranges) {
-    if (!ranges || ranges.length === 0) return html;
-    // 对原始代码进行语法高亮，但按区间分割
-    var segments = [];
-    var lastIndex = 0;
-    // 对 ranges 按 start 排序
-    var sortedRanges = ranges.slice().sort(function(a, b) { return a.start - b.start; });
-    for (var i = 0; i < sortedRanges.length; i++) {
-      var range = sortedRanges[i];
-      if (range.start > lastIndex) {
-        segments.push({
-          text: rawCode.substring(lastIndex, range.start),
-          className: null
-        });
-      }
-      segments.push({
-        text: rawCode.substring(range.start, range.end),
-        className: range.type === 'search' ? 'search-match' : 'bracket-match'
-      });
-      lastIndex = range.end;
+  // ==================== 全量更新 ====================
+  function fullUpdate() {
+    updateLineNumbers();
+    updateCursorPosition();
+    scheduleHighlightUpdate();
+    updateMatchCount();
+  }
+
+  // 防抖更新
+  function debouncedUpdate() {
+    if (EditorState.updateTimer) {
+      clearTimeout(EditorState.updateTimer);
     }
-    if (lastIndex < rawCode.length) {
-      segments.push({
-        text: rawCode.substring(lastIndex),
-        className: null
-      });
+    EditorState.updateTimer = setTimeout(fullUpdate, 80);
+  }
+
+  // ==================== Toast 提示 ====================
+  function showToast(message, isError) {
+    if (EditorState.toastTimer) {
+      clearTimeout(EditorState.toastTimer);
     }
-    // 对每个片段独立进行语法高亮，并包裹 className
-    var resultHtml = '';
-    for (var j = 0; j < segments.length; j++) {
-      var seg = segments[j];
-      var highlightedSeg = syntaxHighlightMainThread(seg.text, EditorState.currentLanguage);
-      if (seg.className) {
-        resultHtml += '<span class="' + seg.className + '">' + highlightedSeg + '</span>';
+    toast.textContent = message;
+    if (isError) {
+      toast.className = 'toast error';
+    } else {
+      toast.className = 'toast';
+    }
+    void toast.offsetHeight;
+    toast.classList.add('show');
+    EditorState.toastTimer = setTimeout(function() {
+      toast.classList.remove('show');
+      EditorState.toastTimer = null;
+    }, 2500);
+  }
+
+  // ==================== 复制功能 ====================
+  async function copyCode() {
+    var currentCode = codeEditor.value;
+    if (!currentCode.trim()) {
+      showToast('⚠️ 编辑器为空，请先输入代码', true);
+      return;
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(currentCode);
       } else {
-        resultHtml += highlightedSeg;
+        var tempTextarea = document.createElement('textarea');
+        tempTextarea.value = currentCode;
+        tempTextarea.style.position = 'fixed';
+        tempTextarea.style.left = '-9999px';
+        document.body.appendChild(tempTextarea);
+        tempTextarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempTextarea);
       }
+      copyIcon.style.display = 'none';
+      checkIcon.style.display = 'inline-block';
+      copyText.textContent = '已复制!';
+      btnCopy.style.background = 'var(--green-bg)';
+      btnCopy.style.color = 'var(--green)';
+      btnCopy.style.borderColor = 'rgba(166,227,161,0.3)';
+      showToast('✅ 代码已复制到剪贴板');
+      if (EditorState.copyRestoreTimer) {
+        clearTimeout(EditorState.copyRestoreTimer);
+      }
+      EditorState.copyRestoreTimer = setTimeout(function() {
+        checkIcon.style.display = 'none';
+        copyIcon.style.display = 'inline-block';
+        copyText.textContent = '复制';
+        btnCopy.style.background = '';
+        btnCopy.style.color = '';
+        btnCopy.style.borderColor = '';
+        EditorState.copyRestoreTimer = null;
+      }, 2000);
+    } catch (copyError) {
+      showToast('❌ 复制失败，请手动选择复制', true);
     }
-    return resultHtml;
   }
 
-  // 注意：上面的 applyExtraHighlightsToHtml 引用了 syntaxHighlightMainThread，但该函数在主线程中已定义。
-  // 由于主线程中我们保留了 syntaxHighlightMainThread 函数（用于降级），可以直接使用。
-  // 但为了完整，我们将在后面定义该函数。此处先预留。
-  // ==================== 主线程语法高亮（同步，用于降级和片段高亮，与 Worker 内逻辑完全一致） ====================
-  function syntaxHighlightMainThread(code, language) {
-    if (!code) return '';
-    var escaped = escapeHtml(code);
-    var stringPlaceholders = [];
-    var stringIndex = 0;
-
-    function protectStrings(text, patterns) {
-      for (var p = 0; p < patterns.length; p++) {
-        var regex = patterns[p].regex;
-        text = text.replace(regex, function(match) {
-          var placeholder = '%%STRING' + (stringIndex++) + '%%';
-          stringPlaceholders.push({ placeholder: placeholder, original: match, wrapper: patterns[p].wrapper });
-          return placeholder;
-        });
-      }
-      return text;
+  // ==================== 清空与全选 ====================
+  function clearEditor() {
+    if (!codeEditor.value.trim()) {
+      showToast('编辑器已为空');
+      return;
     }
-
-    function restoreStrings(text) {
-      for (var i = 0; i < stringPlaceholders.length; i++) {
-        var item = stringPlaceholders[i];
-        var replacement = item.wrapper ? '<span class="' + item.wrapper + '">' + item.original + '</span>' : item.original;
-        text = text.split(item.placeholder).join(replacement);
-      }
-      return text;
+    if (!confirm('确定要清空编辑器中的所有代码吗？')) {
+      return;
     }
-
-    if (language === 'js' || language === 'javascript') {
-      escaped = protectStrings(escaped, [
-        { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, wrapper: 'str' }
-      ]);
-      escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, function(m) { return '<span class="cmt">' + m + '</span>'; });
-      escaped = escaped.replace(/(\/\/.*)/g, '<span class="cmt">$1</span>');
-      escaped = escaped.replace(/\b(function|const|let|var|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|import|export|from|async|await|try|catch|throw|typeof|instanceof|this|super|default|yield|of|in|static|get|set)\b/g, '<span class="kw">$1</span>');
-      escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
-      escaped = escaped.replace(/\b([a-zA-Z_$][\w$]*)\s*\(/g, '<span class="fn">$1</span>(');
-      escaped = escaped.replace(/\.([a-zA-Z_$][\w$]*)/g, '.<span class="prop">$1</span>');
-      escaped = restoreStrings(escaped);
-    } else if (language === 'html') {
-      escaped = protectStrings(escaped, [
-        { regex: /=(".*?"|'.*?')/g, wrapper: 'str' }
-      ]);
-      escaped = escaped.replace(/&lt;!--[\s\S]*?--&gt;/g, '<span class="cmt">$&</span>');
-      escaped = escaped.replace(/(&lt;\/?)([\w-]+)([\s\S]*?)(\/?&gt;)/g, function(m, openTag, tagName, attributes, closeTag) {
-        var processedAttributes = attributes.replace(/([\w-]+)(=)(%%STRING\d+%%)/g, '<span class="attr">$1</span>$2$3');
-        return openTag + '<span class="tag">' + tagName + '</span>' + processedAttributes + closeTag;
-      });
-      escaped = restoreStrings(escaped);
-    } else if (language === 'css') {
-      escaped = protectStrings(escaped, [
-        { regex: /:\s*([^;{}]+)/g, wrapper: null }
-      ]);
-      escaped = escaped.replace(/([\w-]+)\s*:/g, '<span class="attr">$1</span>:');
-      escaped = restoreStrings(escaped);
-      escaped = escaped.replace(/:\s*([^;{}]+)/g, function(m, val) {
-        var highlightedVal = val.replace(/(#[0-9a-fA-F]{3,8}|\d+\.?\d*(\w+|%)?)/g, '<span class="num">$1</span>');
-        return ': ' + highlightedVal;
-      });
-      escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, '<span class="cmt">$&</span>');
-      escaped = escaped.replace(/([.#][\w-]+)/g, '<span class="tag">$1</span>');
-    } else if (language === 'python') {
-      escaped = protectStrings(escaped, [
-        { regex: /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, wrapper: 'str' }
-      ]);
-      escaped = escaped.replace(/(#.*)/g, '<span class="cmt">$1</span>');
-      escaped = escaped.replace(/\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|pass|break|continue|yield|lambda|and|or|not|in|is|None|True|False|self|print|range|len|int|str|float|list|dict|set|tuple)\b/g, '<span class="kw">$1</span>');
-      escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
-      escaped = escaped.replace(/def\s+([a-zA-Z_]\w*)/g, 'def <span class="fn">$1</span>');
-      escaped = escaped.replace(/(@[\w.]+)/g, '<span class="tag">$1</span>');
-      escaped = restoreStrings(escaped);
-    }
-    return escaped;
+    codeEditor.value = '';
+    fullUpdate();
+    codeEditor.focus();
+    showToast('🗑️ 编辑器已清空');
   }
 
-  // ==================== 行号更新（虚拟滚动） ====================
-  var lineHeightCache = 0;
-  var lastFontSizeForCache = 0;
+  function selectAll() {
+    codeEditor.focus();
+    codeEditor.select();
+    updateCursorPosition();
+  }
 
-  function updateLineCounts() {
-    var codeText = codeEditor.value;
-    var totalLines = getLineCount(codeText);
-    lineCountEl.textContent = '行: ' + totalLines;
-    charCountEl.textContent = '字符: ' + codeText.length;
+  function toggleClearButton() {
+    btnClear.disabled = (codeEditor.value === '');
+  }
 
-    if (totalLines > EditorState.largeFileThreshold && EditorState.highlightEnabled && !EditorState.userForcedHighlight) {
-      setHighlightEnabled(false);
-      largeFileWarning.style.display = 'block';
+  // ==================== 大文件高亮开关逻辑 ====================
+  function setHighlightEnabled(enabled) {
+    EditorState.highlightEnabled = enabled;
+    saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, enabled);
+    if (enabled) {
+      btnEnableHighlight.style.display = 'none';
+      btnDisableHighlight.style.display = 'inline-block';
+      largeFileWarning.style.display = 'none';
+      // 用户手动开启，设置覆盖标志
+      EditorState.userForcedHighlight = true;
+      scheduleHighlightUpdate();
+    } else {
       btnEnableHighlight.style.display = 'inline-block';
       btnDisableHighlight.style.display = 'none';
-      showToast('⚠️ 文件较大，已自动关闭实时高亮以保证流畅', true);
+      // 如果是用户手动关闭，清除覆盖标志
+      EditorState.userForcedHighlight = false;
+      if (codeEditor.value.split('\n').length > EditorState.largeFileThreshold) {
+        largeFileWarning.style.display = 'block';
+      }
+      updateShadowHighlight(escapeHtml(codeEditor.value), EditorState.wordWrapEnabled);
+      syncShadowScroll();
     }
   }
 
-  function updateLineNumbers() {
-    var codeText = codeEditor.value;
-    var totalLines = getLineCount(codeText);
+  btnEnableHighlight.addEventListener('click', function() {
+    setHighlightEnabled(true);
+    showToast('✅ 实时高亮已开启');
+  });
+  btnDisableHighlight.addEventListener('click', function() {
+    setHighlightEnabled(false);
+    showToast('实时高亮已关闭');
+  });
 
-    if (lineHeightCache === 0 || EditorState.currentFontSize !== lastFontSizeForCache) {
-      var testSpan = document.createElement('span');
-      testSpan.textContent = '0';
-      testSpan.style.fontFamily = 'var(--editor-font)';
-      testSpan.style.fontSize = EditorState.currentFontSize + 'px';
-      testSpan.style.lineHeight = getComputedStyle(document.documentElement).getPropertyValue('--editor-line-height').trim() || '1.7';
-      document.body.appendChild(testSpan);
-      lineHeightCache = testSpan.getBoundingClientRect().height;
-      document.body.removeChild(testSpan);
-      lastFontSizeForCache = EditorState.currentFontSize;
-    }
-
-    var scrollTop = codeEditor.scrollTop;
-    var clientHeight = codeEditor.clientHeight;
-    var startLine = Math.floor(scrollTop / lineHeightCache) + 1;
-    var endLine = Math.min(totalLines, Math.ceil((scrollTop + clientHeight) / lineHeightCache) + 1);
-
-    var lineNumbersHtml = '';
-    if (startLine > 1) {
-      lineNumbersHtml += '<span style="height:' + ((startLine - 1) * lineHeightCache) + 'px;display:block;"></span>';
-    }
-    for (var lineIndex = startLine; lineIndex <= endLine; lineIndex++) {
-      lineNumbersHtml += '<span>' + lineIndex + '</span>\n';
-    }
-    if (endLine < totalLines) {
-      lineNumbersHtml += '<span style="height:' + ((totalLines - endLine) * lineHeightCache) + 'px;display:block;"></span>';
-    }
-    lineNumbers.innerHTML = lineNumbersHtml;
-  }
-
-  function updateCursorPosition() {
-    var selectionStart = codeEditor.selectionStart;
-    var selectionEnd = codeEditor.selectionEnd;
-    var codeText = codeEditor.value;
-    if (selectionStart !== selectionEnd) {
-      var selectedText = codeText.substring(selectionStart, selectionEnd);
-      var selectedLineCount = getLineCount(selectedText);
-      cursorPosEl.textContent = '选中: ' + selectedText.length + ' 字符 / ' + selectedLineCount + ' 行';
-    } else {
-      var textBeforeCursor = codeText.substring(0, selectionStart);
-      var linesBeforeCursor = textBeforeCursor.split('\n');
-      var currentRow = linesBeforeCursor.length;
-      var currentColumn = linesBeforeCursor[linesBeforeCursor.length - 1].length + 1;
-      cursorPosEl.textContent = '行:' + currentRow + ' 列:' + currentColumn;
-    }
-  }
-
-  // ==================== 滚动同步 ====================
-  function syncScroll() {
-    lineNumbers.scrollTop = codeEditor.scrollTop;
-    syncShadowScroll();
-  }
-
-  // ==================== 查找替换弹窗逻辑（增强：全部替换时自动降级高亮） ====================
+  // ==================== 查找替换弹窗逻辑 ====================
   function openReplaceModal() {
     replaceModalOverlay.classList.add('open');
+
+    // 恢复弹窗位置
     var savedPosition = loadFromLocalStorage(STORAGE_KEYS.REPLACE_MODAL_POSITION, null);
     if (savedPosition && savedPosition.left !== undefined && savedPosition.top !== undefined) {
       replaceModal.style.position = 'fixed';
@@ -1759,6 +1662,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       replaceModal.style.top = '';
       replaceModal.style.margin = '';
     }
+
+    // 恢复弹窗尺寸
     var savedSize = loadFromLocalStorage(STORAGE_KEYS.REPLACE_MODAL_SIZE, null);
     if (savedSize && savedSize.width && savedSize.height) {
       replaceModal.style.width = savedSize.width + 'px';
@@ -1767,6 +1672,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       replaceModal.style.width = '';
       replaceModal.style.height = '';
     }
+
     replaceFind.focus();
     updateMatchCount();
   }
@@ -1783,6 +1689,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         height: modalRect.height
       });
     }
+
     replaceModalOverlay.classList.remove('open');
     EditorState.lastSearchMatches = [];
     EditorState.searchMatchIndex = -1;
@@ -1814,14 +1721,18 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     );
   }
 
-  function findNext() {
-    var foundMatches = getMatchRangesSync(
+  function findMatchesSync() {
+    return getMatchRangesSync(
       codeEditor.value,
       replaceFind.value,
       replaceCaseSensitive.checked,
       replaceWholeWord.checked,
       replaceUseRegex.checked
     );
+  }
+
+  function findNext() {
+    var foundMatches = findMatchesSync();
     if (foundMatches.length === 0) {
       var regex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
       if (!regex && replaceFind.value && replaceUseRegex.checked) {
@@ -1843,24 +1754,21 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var targetMatch = foundMatches[nextMatchIndex];
     codeEditor.focus();
     codeEditor.setSelectionRange(targetMatch.start, targetMatch.end);
+
+    // 滚动到匹配项
     var textBeforeMatch = codeEditor.value.substring(0, targetMatch.start);
-    var targetLineNumber = getLineCount(textBeforeMatch);
-    var totalLines = getLineCount(codeEditor.value);
+    var targetLineNumber = textBeforeMatch.split('\n').length;
+    var totalLines = codeEditor.value.split('\n').length;
     var estimatedLineHeight = codeEditor.scrollHeight / totalLines;
     var scrollTarget = (targetLineNumber - 1) * estimatedLineHeight - codeEditor.clientHeight / 3;
     codeEditor.scrollTop = Math.max(0, scrollTarget);
+
     updateCursorPosition();
     showToast('匹配 ' + (nextMatchIndex + 1) + '/' + foundMatches.length);
   }
 
   function replaceOne() {
-    var foundMatches = getMatchRangesSync(
-      codeEditor.value,
-      replaceFind.value,
-      replaceCaseSensitive.checked,
-      replaceWholeWord.checked,
-      replaceUseRegex.checked
-    );
+    var foundMatches = findMatchesSync();
     if (foundMatches.length === 0) {
       var regex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
       if (!regex && replaceFind.value && replaceUseRegex.checked) {
@@ -1882,22 +1790,10 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
     var targetMatch = foundMatches[currentMatchIndex];
     var replacementText = replaceWith.value;
-    codeEditor.focus();
-    codeEditor.setSelectionRange(targetMatch.start, targetMatch.end);
-    if (document.queryCommandSupported('insertText')) {
-      document.execCommand('insertText', false, replacementText);
-    } else {
-      var currentCode = codeEditor.value;
-      codeEditor.value = currentCode.substring(0, targetMatch.start) + replacementText + currentCode.substring(targetMatch.end);
-    }
+    var currentCode = codeEditor.value;
+    codeEditor.value = currentCode.substring(0, targetMatch.start) + replacementText + currentCode.substring(targetMatch.end);
     fullUpdate();
-    var newMatches = getMatchRangesSync(
-      codeEditor.value,
-      replaceFind.value,
-      replaceCaseSensitive.checked,
-      replaceWholeWord.checked,
-      replaceUseRegex.checked
-    );
+    var newMatches = findMatchesSync();
     EditorState.lastSearchMatches = newMatches;
     if (newMatches.length > 0) {
       var nextMatchIndex = newMatches.findIndex(function(match) {
@@ -1912,15 +1808,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   }
 
   function replaceAll() {
-    // 大文件优化：如果文件行数超过阈值且高亮开启，临时关闭高亮，操作后恢复
-    var totalLines = getLineCount(codeEditor.value);
-    var wasHighlightEnabled = EditorState.highlightEnabled;
-    var shouldTempDisableHighlight = (totalLines > EditorState.largeFileThreshold && wasHighlightEnabled);
-    if (shouldTempDisableHighlight) {
-      setHighlightEnabled(false);
-      showToast('文件较大，已临时关闭高亮以保证替换流畅，操作后可手动重新开启', false);
-    }
-
     var searchRegex = buildSearchRegex(replaceFind.value, replaceCaseSensitive.checked, replaceWholeWord.checked, replaceUseRegex.checked);
     if (!searchRegex) {
       if (replaceUseRegex.checked && replaceFind.value) {
@@ -1928,19 +1815,16 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       } else {
         showToast('请输入有效的查找内容', true);
       }
-      if (shouldTempDisableHighlight) setHighlightEnabled(true);
       return;
     }
     var currentCode = codeEditor.value;
     var matchedItems = currentCode.match(searchRegex);
     if (!matchedItems) {
       showToast('未找到匹配项', true);
-      if (shouldTempDisableHighlight) setHighlightEnabled(true);
       return;
     }
     var totalMatches = matchedItems.length;
     if (!confirm('确定要替换全部 ' + totalMatches + ' 处匹配吗？')) {
-      if (shouldTempDisableHighlight) setHighlightEnabled(true);
       return;
     }
     codeEditor.value = currentCode.replace(searchRegex, replaceWith.value);
@@ -1948,11 +1832,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     showToast('✅ 已替换 ' + totalMatches + ' 处匹配');
     EditorState.lastSearchMatches = [];
     EditorState.searchMatchIndex = -1;
-    // 恢复高亮状态
-    if (shouldTempDisableHighlight) {
-      setHighlightEnabled(true);
-      showToast('已恢复高亮', false);
-    }
   }
 
   // ==================== 查找替换输入持久化 ====================
@@ -1970,14 +1849,25 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     replaceCaseSensitive.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_CASE_SENSITIVE, false);
     replaceWholeWord.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_WHOLE_WORD, false);
     replaceUseRegex.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_USE_REGEX, false);
+    autoResizeTextarea(replaceFind);
+    autoResizeTextarea(replaceWith);
+  }
+
+  function autoResizeTextarea(textareaElement) {
+    textareaElement.style.height = 'auto';
+    textareaElement.style.height = Math.min(textareaElement.scrollHeight, 120) + 'px';
   }
 
   replaceFind.addEventListener('input', function() {
     updateMatchCount();
+    autoResizeTextarea(replaceFind);
     persistReplaceInputs();
     scheduleHighlightUpdate();
   });
-  replaceWith.addEventListener('input', persistReplaceInputs);
+  replaceWith.addEventListener('input', function() {
+    autoResizeTextarea(replaceWith);
+    persistReplaceInputs();
+  });
   replaceCaseSensitive.addEventListener('change', function() {
     updateMatchCount();
     persistReplaceInputs();
@@ -2030,7 +1920,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return inSingleQuote || inDoubleQuote || inBacktick || inLineComment || inBlockComment;
   }
 
-  // ==================== 键盘编辑事件（完整保留原逻辑） ====================
+  // ==================== 键盘编辑事件 ====================
   codeEditor.addEventListener('keydown', function(event) {
     var openingPairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
     var closingPairs = { ')': '(', ']': '[', '}': '{' };
@@ -2203,20 +2093,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       updateMatchCount();
     }
   });
-
-  // 滚动事件（节流，并刷新行号）
-  var scrollTicking = false;
-  codeEditor.addEventListener('scroll', function() {
-    if (!scrollTicking) {
-      requestAnimationFrame(function() {
-        syncScroll();
-        updateLineNumbers();
-        scrollTicking = false;
-      });
-      scrollTicking = true;
-    }
-  });
-
+  codeEditor.addEventListener('scroll', syncScroll);
   codeEditor.addEventListener('paste', function(event) {
     event.preventDefault();
     var clipboardData = event.clipboardData || window.clipboardData;
@@ -2227,7 +2104,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     fullUpdate();
   });
 
-  // ==================== 文件导入（增加 Loading 提示） ====================
+  // ==================== 文件导入 ====================
   btnImport.addEventListener('click', function() {
     fileInput.click();
   });
@@ -2250,72 +2127,50 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       }
     }
     var fileReader = new FileReader();
-    fileReader.onloadstart = function() {
-      EditorState.isLoadingFile = true;
-      showToast('📂 正在加载文件，请稍候...', false);
-    };
     fileReader.onload = function(loadEvent) {
-      loadFileContent(loadEvent.target.result, selectedFile.name);
+      codeEditor.value = loadEvent.target.result;
+      fullUpdate();
+      setOriginalCode(codeEditor.value);
+      var fileExtension = selectedFile.name.split('.').pop().toLowerCase();
+      var extensionLanguageMap = { js: 'js', ts: 'js', jsx: 'js', html: 'html', css: 'css', py: 'python', json: 'js', xml: 'html', md: 'html' };
+      if (extensionLanguageMap[fileExtension]) switchLanguage(extensionLanguageMap[fileExtension]);
       showToast('📂 已加载 ' + selectedFile.name);
-      EditorState.isLoadingFile = false;
       fileInput.value = '';
     };
-    fileReader.onerror = function() {
-      showToast('❌ 文件读取失败', true);
-      EditorState.isLoadingFile = false;
-    };
+    fileReader.onerror = function() { showToast('❌ 文件读取失败', true); };
     fileReader.readAsText(selectedFile);
   });
 
-  function handleFileSelect(file) {
+  // 拖拽文件支持
+  editorWrapper.addEventListener('dragover', function(event) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  });
+  editorWrapper.addEventListener('drop', function(event) {
+    event.preventDefault();
+    var droppedFile = event.dataTransfer.files[0];
+    if (!droppedFile) return;
     var validExtensions = /\.(js|ts|jsx|html|css|py|txt|json|md|xml)$/i;
-    var isValidTextFile = (file.type && file.type.startsWith('text/')) || validExtensions.test(file.name);
-    if (!isValidTextFile) {
-      showToast('⚠️ 仅支持文本文件', true);
-      return false;
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      var fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      if (!confirm('文件较大 (' + fileSizeMB + ' MB)，加载可能缓慢，是否继续？')) {
-        return false;
-      }
+    var isValidTextFile = (droppedFile.type && droppedFile.type.startsWith('text/')) || validExtensions.test(droppedFile.name);
+    if (!isValidTextFile) { showToast('⚠️ 仅支持文本文件', true); return; }
+    if (droppedFile.size > 2 * 1024 * 1024) {
+      var fileSizeMB = (droppedFile.size / (1024 * 1024)).toFixed(2);
+      if (!confirm('文件较大 (' + fileSizeMB + ' MB)，加载可能缓慢，是否继续？')) return;
     }
     var fileReader = new FileReader();
-    fileReader.onloadstart = function() {
-      EditorState.isLoadingFile = true;
-      showToast('📂 正在加载文件...', false);
-    };
     fileReader.onload = function(loadEvent) {
-      loadFileContent(loadEvent.target.result, file.name);
-      showToast('📂 已加载 ' + file.name);
-      EditorState.isLoadingFile = false;
+      codeEditor.value = loadEvent.target.result;
+      fullUpdate();
+      setOriginalCode(codeEditor.value);
+      var fileExtension = droppedFile.name.split('.').pop().toLowerCase();
+      var extensionLanguageMap = { js: 'js', ts: 'js', jsx: 'js', html: 'html', css: 'css', py: 'python', json: 'js', xml: 'html', md: 'html' };
+      if (extensionLanguageMap[fileExtension]) switchLanguage(extensionLanguageMap[fileExtension]);
+      showToast('📂 已拖入 ' + droppedFile.name);
     };
-    fileReader.onerror = function() {
-      showToast('❌ 文件读取失败', true);
-      EditorState.isLoadingFile = false;
-    };
-    fileReader.readAsText(file);
-    return true;
-  }
+    fileReader.readAsText(droppedFile);
+  });
 
-  function setupDropTarget(element) {
-    element.addEventListener('dragover', function(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = 'copy';
-    });
-    element.addEventListener('drop', function(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      var droppedFile = event.dataTransfer.files[0];
-      if (!droppedFile) return;
-      handleFileSelect(droppedFile);
-    });
-  }
-  setupDropTarget(editorWrapper);
-  setupDropTarget(codeEditor);
-
-  // ==================== 下载功能（保持原样） ====================
+  // ==================== 下载功能（带 IndexedDB 目录句柄记忆） ====================
   function openDirectoryDB() {
     return new Promise(function(resolve, reject) {
       var request = indexedDB.open(DIR_HANDLE_DB_NAME, 1);
@@ -2395,6 +2250,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       }
     }
 
+    // 降级方案：传统下载
     var userInputFilename = prompt('请输入文件名（无需后缀）:', 'code');
     if (userInputFilename === null) return;
     var finalFilename = (userInputFilename.trim() || 'code') + '.' + fileExtension;
@@ -2410,6 +2266,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     showToast('💾 已下载 ' + finalFilename);
   });
 
+  // ==================== 更改保存位置 ====================
   async function changeSaveDirectory() {
     if (!window.showDirectoryPicker) {
       showToast('⚠️ 您的浏览器不支持目录选择，请使用传统下载', true);
@@ -2423,7 +2280,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       await saveDirectoryHandle(directoryHandle);
       showToast('📁 保存位置已更新');
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (err.name === 'AbortError') return; // 用户取消
       console.error('更改保存位置失败:', err);
       showToast('❌ 更改保存位置失败', true);
     }
@@ -2582,6 +2439,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     else if (theme === 'cream') btnTheme.textContent = '🧁';
     else btnTheme.textContent = '☀️';
     btnTheme.setAttribute('aria-label', '切换主题（当前：' + theme + '）');
+    // 主题变化后同步 Shadow DOM CSS 变量
     syncShadowCSSVariables();
   }
 
@@ -2604,7 +2462,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     EditorState.currentFontSize = Math.max(10, Math.min(30, size));
     document.documentElement.style.setProperty('--editor-font-size', EditorState.currentFontSize + 'px');
     saveToLocalStorage(STORAGE_KEYS.FONT_SIZE, EditorState.currentFontSize);
-    syncShadowCSSVariables();
+    syncShadowCSSVariables(); // 字体变化同步到 Shadow DOM
   }
 
   document.addEventListener('keydown', function(event) {
@@ -2627,6 +2485,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var savedSize = loadFromLocalStorage(STORAGE_KEYS.FONT_SIZE, 14);
     EditorState.currentFontSize = savedSize;
     document.documentElement.style.setProperty('--editor-font-size', savedSize + 'px');
+    // 初始化后同步一次 Shadow DOM 变量
     syncShadowCSSVariables();
   }
 
@@ -2724,17 +2583,31 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
     if ((event.ctrlKey || event.metaKey) && event.key === 's') {
       event.preventDefault();
-      saveImmediately().catch(function() {});
+      saveImmediately().catch(function() {}); // 增加错误捕获
     }
+    // 撤销 Ctrl+Z
     if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
       event.preventDefault();
       handleUndo();
       updateUndoRedoState();
     }
+    // 重做 Ctrl+Y 或 Ctrl+Shift+Z
     if ((event.ctrlKey || event.metaKey) && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
       event.preventDefault();
       handleRedo();
       updateUndoRedoState();
+    }
+  });
+
+  // 关闭页面前释放资源
+  window.addEventListener('beforeunload', function() {
+    if (EditorState.highlightWorker) {
+      EditorState.highlightWorker.terminate();
+      EditorState.highlightWorker = null;
+    }
+    if (EditorState.codeModified) {
+      // 现代浏览器会忽略自定义消息，但仍需返回字符串以触发确认框
+      return '您有未保存的更改';
     }
   });
 
@@ -2750,6 +2623,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   }
 
   function updateUndoRedoState() {
+    // 查询命令是否可用，设置按钮禁用状态
     btnUndo.disabled = !document.queryCommandEnabled('undo');
     btnRedo.disabled = !document.queryCommandEnabled('redo');
   }
@@ -2763,238 +2637,18 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     updateUndoRedoState();
   });
 
+  // 在每次输入或操作后更新按钮状态
   codeEditor.addEventListener('input', updateUndoRedoState);
   codeEditor.addEventListener('keyup', updateUndoRedoState);
+  // 初始状态
   updateUndoRedoState();
 
-  // ==================== 复制功能 ====================
-  async function copyCode() {
-    var currentCode = codeEditor.value;
-    if (!currentCode.trim()) {
-      showToast('⚠️ 编辑器为空，请先输入代码', true);
-      return;
-    }
-    var copied = false;
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(currentCode);
-        copied = true;
-      } else {
-        copied = fallbackCopy(currentCode);
-      }
-    } catch (clipboardError) {
-      copied = fallbackCopy(currentCode);
-    }
-
-    if (copied) {
-      copyIcon.style.display = 'none';
-      checkIcon.style.display = 'inline-block';
-      copyText.textContent = '已复制!';
-      btnCopy.style.background = 'var(--green-bg)';
-      btnCopy.style.color = 'var(--green)';
-      btnCopy.style.borderColor = 'rgba(166,227,161,0.3)';
-      showToast('✅ 代码已复制到剪贴板');
-      if (EditorState.copyRestoreTimer) {
-        clearTimeout(EditorState.copyRestoreTimer);
-      }
-      EditorState.copyRestoreTimer = setTimeout(function() {
-        checkIcon.style.display = 'none';
-        copyIcon.style.display = 'inline-block';
-        copyText.textContent = '复制';
-        btnCopy.style.background = '';
-        btnCopy.style.color = '';
-        btnCopy.style.borderColor = '';
-        EditorState.copyRestoreTimer = null;
-      }, 2000);
-    } else {
-      showToast('❌ 复制失败，请手动选择复制', true);
-    }
-  }
-
-  function fallbackCopy(text) {
-    try {
-      var tempTextarea = document.createElement('textarea');
-      tempTextarea.value = text;
-      tempTextarea.style.position = 'fixed';
-      tempTextarea.style.left = '-9999px';
-      tempTextarea.style.top = (window.pageYOffset || document.documentElement.scrollTop) + 'px';
-      document.body.appendChild(tempTextarea);
-      tempTextarea.focus();
-      tempTextarea.select();
-      var successful = document.execCommand('copy');
-      document.body.removeChild(tempTextarea);
-      return successful;
-    } catch (e) {
-      return false;
-    }
-  }
-
+  // ==================== 按钮事件绑定 ====================
   btnCopy.addEventListener('click', copyCode);
-
-  // ==================== 清空与全选 ====================
-  function clearEditor() {
-    if (!codeEditor.value.trim()) {
-      showToast('编辑器已为空');
-      return;
-    }
-    if (!confirm('确定要清空编辑器中的所有代码吗？')) {
-      return;
-    }
-    codeEditor.value = '';
-    fullUpdate();
-    codeEditor.focus();
-    showToast('🗑️ 编辑器已清空');
-  }
-
-  function selectAll() {
-    codeEditor.focus();
-    codeEditor.select();
-    updateCursorPosition();
-  }
-
-  function toggleClearButton() {
-    btnClear.disabled = (codeEditor.value === '');
-  }
-
   btnClear.addEventListener('click', clearEditor);
   btnSelectAll.addEventListener('click', selectAll);
   btnToggleReplace.addEventListener('click', toggleReplaceModal);
-
-  // ==================== 加载文件内容（优化：大文件时关闭高亮，避免卡顿） ====================
-  function loadFileContent(content, fileName) {
-    var previousHighlightEnabled = EditorState.highlightEnabled;
-    var previousUserForced = EditorState.userForcedHighlight;
-
-    EditorState.highlightEnabled = false;
-
-    codeEditor.focus();
-    codeEditor.select();
-    if (document.queryCommandSupported('insertText')) {
-      document.execCommand('insertText', false, content);
-    } else {
-      codeEditor.value = content;
-    }
-
-    fullUpdate();
-    setOriginalCode(content);
-
-    var lineCount = getLineCount(content);
-    if (previousUserForced) {
-      EditorState.highlightEnabled = true;
-    } else if (lineCount > EditorState.largeFileThreshold) {
-      EditorState.highlightEnabled = false;
-    } else {
-      EditorState.highlightEnabled = previousHighlightEnabled;
-    }
-
-    if (EditorState.highlightEnabled) {
-      btnEnableHighlight.style.display = 'none';
-      btnDisableHighlight.style.display = 'inline-block';
-      largeFileWarning.style.display = 'none';
-    } else {
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
-      if (lineCount > EditorState.largeFileThreshold) {
-        largeFileWarning.style.display = 'block';
-      } else {
-        largeFileWarning.style.display = 'none';
-      }
-    }
-
-    saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, EditorState.highlightEnabled);
-    scheduleHighlightUpdate();
-
-    var fileExtension = fileName.split('.').pop().toLowerCase();
-    var extensionLanguageMap = { js: 'js', ts: 'js', jsx: 'js', html: 'html', css: 'css', py: 'python', json: 'js', xml: 'html', md: 'html' };
-    if (extensionLanguageMap[fileExtension]) switchLanguage(extensionLanguageMap[fileExtension]);
-  }
-
-  // ==================== 大文件高亮开关逻辑 ====================
-  function setHighlightEnabled(enabled) {
-    EditorState.highlightEnabled = enabled;
-    saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, enabled);
-    if (enabled) {
-      btnEnableHighlight.style.display = 'none';
-      btnDisableHighlight.style.display = 'inline-block';
-      largeFileWarning.style.display = 'none';
-      EditorState.userForcedHighlight = true;
-      scheduleHighlightUpdate();
-    } else {
-      btnEnableHighlight.style.display = 'inline-block';
-      btnDisableHighlight.style.display = 'none';
-      EditorState.userForcedHighlight = false;
-      if (getLineCount(codeEditor.value) > EditorState.largeFileThreshold) {
-        largeFileWarning.style.display = 'block';
-      }
-      var escapedCode = escapeHtml(codeEditor.value);
-      updateShadowHighlight(escapedCode, EditorState.wordWrapEnabled);
-      syncShadowScroll();
-    }
-  }
-
-  btnEnableHighlight.addEventListener('click', function() {
-    setHighlightEnabled(true);
-    showToast('✅ 实时高亮已开启');
-  });
-  btnDisableHighlight.addEventListener('click', function() {
-    setHighlightEnabled(false);
-    showToast('实时高亮已关闭');
-  });
-
-  // ==================== Toast 提示 ====================
-  function showToast(message, isError) {
-    if (EditorState.toastTimer) {
-      clearTimeout(EditorState.toastTimer);
-    }
-    toast.textContent = message;
-    if (isError) {
-      toast.className = 'toast error';
-    } else {
-      toast.className = 'toast';
-    }
-    void toast.offsetHeight;
-    toast.classList.add('show');
-    EditorState.toastTimer = setTimeout(function() {
-      toast.classList.remove('show');
-      EditorState.toastTimer = null;
-    }, 2500);
-  }
-
-  // ==================== 全量更新（轻量） ====================
-  function fullUpdate() {
-    updateLineCounts();
-    updateCursorPosition();
-    scheduleHighlightUpdate();
-    updateMatchCount();
-  }
-
-  function debouncedUpdate() {
-    if (EditorState.updateTimer) {
-      clearTimeout(EditorState.updateTimer);
-    }
-    EditorState.updateTimer = setTimeout(fullUpdate, 80);
-  }
-
-  // ==================== 窗口大小变化同步 ====================
-  window.addEventListener('resize', function() {
-    syncScroll();
-    updateLineNumbers();
-  });
-
-  // ==================== 页面关闭前释放资源 ====================
-  window.addEventListener('beforeunload', function() {
-    if (EditorState.highlightWorker) {
-      EditorState.highlightWorker.terminate();
-      EditorState.highlightWorker = null;
-    }
-    if (EditorState.updateTimer) clearTimeout(EditorState.updateTimer);
-    if (EditorState.autoSaveTimer) clearTimeout(EditorState.autoSaveTimer);
-    if (EditorState.copyRestoreTimer) clearTimeout(EditorState.copyRestoreTimer);
-    if (highlightTimer) clearTimeout(highlightTimer);
-    if (EditorState.codeModified) {
-      return '您有未保存的更改';
-    }
-  });
+  window.addEventListener('resize', syncScroll);
 
   // ==================== 初始化流程 ====================
   async function initialize() {
@@ -3011,7 +2665,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     applyInitialWrap();
 
     EditorState.highlightEnabled = loadFromLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, true);
-    EditorState.userForcedHighlight = false;
+    EditorState.userForcedHighlight = false; // 初始化时未手动覆盖
     if (!EditorState.highlightEnabled) {
       btnEnableHighlight.style.display = 'inline-block';
       btnDisableHighlight.style.display = 'none';
@@ -3029,7 +2683,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     try {
       createHighlightWorker();
     } catch (workerError) {
-      console.warn('Web Worker 创建失败，将使用降级模式', workerError);
+      console.warn('Web Worker 创建失败，将使用主线程搜索', workerError);
     }
 
     setupShadowHighlightLayer();
@@ -3051,7 +2705,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     } catch (e) {}
 
     codeEditor.focus();
-    console.log('%c🚀 专业版编辑器 v5.0.0 已就绪（Worker高亮版）', 'color:#a3be8c;font-weight:bold;');
+    console.log('%c🚀 专业版编辑器 v3.0.1 已就绪', 'color:#a3be8c;font-weight:bold;');
   }
 
   initialize();
