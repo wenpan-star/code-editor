@@ -2597,7 +2597,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var fileReader = new FileReader();
     fileReader.onload = function(loadEvent) {
       setEditorContent(loadEvent.target.result, true);
-      setOriginalCode(codeEditor.value);
       var fileExtension = selectedFile.name.split('.').pop().toLowerCase();
       var extensionLanguageMap = { js: 'js', ts: 'js', jsx: 'js', html: 'html', css: 'css', py: 'python', json: 'js', xml: 'html', md: 'html' };
       if (extensionLanguageMap[fileExtension]) switchLanguage(extensionLanguageMap[fileExtension]);
@@ -2627,7 +2626,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var fileReader = new FileReader();
     fileReader.onload = function(loadEvent) {
       setEditorContent(loadEvent.target.result, true);
-      setOriginalCode(codeEditor.value);
       var fileExtension = droppedFile.name.split('.').pop().toLowerCase();
       var extensionLanguageMap = { js: 'js', ts: 'js', jsx: 'js', html: 'html', css: 'css', py: 'python', json: 'js', xml: 'html', md: 'html' };
       if (extensionLanguageMap[fileExtension]) switchLanguage(extensionLanguageMap[fileExtension]);
@@ -2694,8 +2692,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
           directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
           await saveDirectoryHandle(directoryHandle);
         }
-        var userInputFilename = prompt('请输入文件名（无需后缀）:', 'code');
+        var lastFilename = loadFromLocalStorage('editor-last-download-filename', 'code');
+        var userInputFilename = prompt('请输入文件名（无需后缀）:', lastFilename);
         if (userInputFilename === null) return;
+        if (userInputFilename.trim()) {
+          saveToLocalStorage('editor-last-download-filename', userInputFilename.trim());
+        }
         var finalFilename = (userInputFilename.trim() || 'code') + '.' + fileExtension;
         await writeFileToDirectory(directoryHandle, finalFilename, currentCode);
         showToast('💾 已保存 "' + finalFilename + '" 到上次选择的目录');
@@ -2716,8 +2718,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       }
     }
 
-    var userInputFilename = prompt('请输入文件名（无需后缀）:', 'code');
+    var lastFilename = loadFromLocalStorage('editor-last-download-filename', 'code');
+    var userInputFilename = prompt('请输入文件名（无需后缀）:', lastFilename);
     if (userInputFilename === null) return;
+    if (userInputFilename.trim()) {
+      saveToLocalStorage('editor-last-download-filename', userInputFilename.trim());
+    }
     var finalFilename = (userInputFilename.trim() || 'code') + '.' + fileExtension;
     var blob = new Blob([currentCode], { type: mimeType });
     var downloadUrl = URL.createObjectURL(blob);
