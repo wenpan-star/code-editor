@@ -1755,6 +1755,18 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     syncShadowScroll();
   }
 
+  // ==================== 滚动到光标所在行 ====================
+  function scrollToCursor() {
+    var editor = codeEditor;
+    var cursorPosition = editor.selectionStart;
+    var textBeforeCursor = editor.value.substring(0, cursorPosition);
+    var currentLineIndex = textBeforeCursor.split('\n').length - 1;
+    var totalLines = editor.value.split('\n').length;
+    var estimatedLineHeight = editor.scrollHeight / totalLines;
+    var targetScrollTop = currentLineIndex * estimatedLineHeight - editor.clientHeight / 3;
+    editor.scrollTop = Math.max(0, targetScrollTop);
+  }
+
   // ==================== 括号匹配 ====================
   function findMatchingBracket(code, position) {
     var character = code[position];
@@ -1792,11 +1804,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return -1;
   }
 
-  // ==================== 构建高亮 HTML（含行高亮） ====================
+  // ==================== 构建高亮 HTML（含行高亮、搜索匹配、括号匹配） ====================
   function buildHighlightHTML(code, language, searchRanges, bracketRanges, currentLineIndex) {
     if (!code) return '';
     if (!EditorState.highlightEnabled) return escapeHtml(code) + '\n';
 
+    // 合并所有需要额外高亮的范围（搜索匹配 + 括号匹配），并按起始位置排序
     var allHighlightRanges = [];
     for (var i = 0; i < searchRanges.length; i++) {
       allHighlightRanges.push({ start: searchRanges[i].start, end: searchRanges[i].end, type: 'search' });
@@ -1809,39 +1822,75 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var lines = code.split('\n');
     var resultHtml = '';
     var charIndex = 0;
-    var visualLineIndex = 0; // 视觉行索引，跳过折叠行
+    var visualLineIndex = 0;          // 视觉行索引（跳过折叠行）
+    var rangePointer = 0;             // 当前处理到的额外高亮范围索引
 
+    // 辅助函数：处理指定字符范围内的文本，插入语法高亮与额外高亮
+    function processTextSegment(text, segmentStart, segmentEnd) {
+      // 检查是否有额外高亮范围覆盖此段
+      while (rangePointer < allHighlightRanges.length && allHighlightRanges[rangePointer].end <= segmentStart) {
+        rangePointer++;
+      }
+      var result = '';
+      var lastPos = 0;
+      while (rangePointer < allHighlightRanges.length && allHighlightRanges[rangePointer].start < segmentEnd) {
+        var currentRange = allHighlightRanges[rangePointer];
+        var rangeStartInSegment = currentRange.start - segmentStart;
+        var rangeEndInSegment = Math.min(currentRange.end, segmentEnd) - segmentStart;
+        // 处理额外高亮之前的普通文本（应用语法高亮）
+        if (rangeStartInSegment > lastPos) {
+          var plainText = text.substring(segmentStart + lastPos, segmentStart + rangeStartInSegment);
+          result += syntaxHighlightMainThread(plainText, language);
+        }
+        // 处理额外高亮范围内的文本（内嵌语法高亮，外层包裹搜索/括号高亮）
+        var matchText = text.substring(segmentStart + rangeStartInSegment, segmentStart + rangeEndInSegment);
+        var matchClass = currentRange.type === 'search' ? 'search-match' : 'bracket-match';
+        result += '<span class="' + matchClass + '">' + syntaxHighlightMainThread(matchText, language) + '</span>';
+        lastPos = rangeEndInSegment;
+        if (currentRange.end <= segmentEnd) {
+          rangePointer++;
+        } else {
+          break;
+        }
+      }
+      // 处理末尾剩余文本（应用语法高亮）
+      if (lastPos < segmentEnd - segmentStart) {
+        var remainingText = text.substring(segmentStart + lastPos, segmentEnd);
+        result += syntaxHighlightMainThread(remainingText, language);
+      }
+      return result;
+    }
+
+    // 逐行处理（考虑折叠）
     for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      // 检查是否被折叠
       var isLineFolded = false;
       for (var f = 0; f < EditorState.foldedRanges.length; f++) {
-        var range = EditorState.foldedRanges[f];
-        if (lineIdx > range.startLine && lineIdx <= range.endLine) {
+        var foldRange = EditorState.foldedRanges[f];
+        if (lineIdx > foldRange.startLine && lineIdx <= foldRange.endLine) {
           isLineFolded = true;
           break;
         }
       }
       if (isLineFolded) {
-        charIndex += lines[lineIdx].length + 1; // 跳过换行符
+        charIndex += lines[lineIdx].length + 1;
         continue;
       }
 
       var line = lines[lineIdx];
-      var lineStart = charIndex;
-      var lineEnd = lineStart + line.length;
+      var lineStartGlobal = charIndex;
+      var lineEndGlobal = lineStartGlobal + line.length;
 
-      // 行高亮：使用视觉行索引计算位置，确保在折叠时对齐
+      // 当前行背景高亮（独立元素，不参与文本流）
       if (lineIdx === currentLineIndex) {
         var lineHeightPx = EditorState.currentFontSize * 1.7;
         resultHtml += '<span class="line-highlight" style="top:' + (visualLineIndex * lineHeightPx) + 'px;height:' + lineHeightPx + 'px;"></span>';
       }
       visualLineIndex++;
 
-      // 生成带语法高亮的行
-      var syntaxHtml = syntaxHighlightMainThread(line, language);
-      resultHtml += syntaxHtml + '\n';
+      // 处理本行文本，注入语法高亮和额外高亮
+      resultHtml += processTextSegment(code, lineStartGlobal, lineEndGlobal) + '\n';
 
-      charIndex = lineEnd + 1; // +1 for newline
+      charIndex = lineEndGlobal + 1;
     }
     return resultHtml;
   }
@@ -2237,6 +2286,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         var nextMatch = newMatches[nextMatchIndex];
         codeEditor.setSelectionRange(nextMatch.start, nextMatch.end);
         EditorState.searchMatchIndex = nextMatchIndex;
+        scrollToCursor();
       }
     }
   }
@@ -3060,6 +3110,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
       event.preventDefault();
       if (historyManager.undo(codeEditor)) {
+        scrollToCursor();
         updateUndoRedoState();
         fullUpdate();
         triggerAutoSave();
@@ -3069,6 +3120,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     if ((event.ctrlKey || event.metaKey) && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
       event.preventDefault();
       if (historyManager.redo(codeEditor)) {
+        scrollToCursor();
         updateUndoRedoState();
         fullUpdate();
         triggerAutoSave();
@@ -3121,6 +3173,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   // ==================== 撤销/重做 UI 更新 ====================
   function handleUndo() {
     if (historyManager.undo(codeEditor)) {
+      scrollToCursor();
       fullUpdate();
       triggerAutoSave();
     }
@@ -3128,6 +3181,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
 
   function handleRedo() {
     if (historyManager.redo(codeEditor)) {
+      scrollToCursor();
       fullUpdate();
       triggerAutoSave();
     }
