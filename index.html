@@ -1,26 +1,25 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
-  <title>在线代码编辑器 · 专业版 v3.2.0</title>
+  <title>在线代码编辑器 · 专业版 v7.3.3</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23f5a623' rx='20'/%3E%3Cpath d='M35,40 L48,50 L35,60' stroke='%232d2d2d' fill='none' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M55,65 L70,35' stroke='%232d2d2d' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M65,40 L52,50 L65,60' stroke='%232d2d2d' fill='none' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <!--
   ================================================================================
-   版本：v3.2.0（交互增强与性能优化版）
-   更新日期：2026-06-07
+   版本：v7.3.3（健壮性、交互一致性强化版）
+   更新日期：2026-06-09
    主要更新：
-     1. 修复双层滚动条：Shadow DOM 高亮层 pre 元素 overflow 改为 hidden，彻底消除双重滚动条。
-     2. 大文件警告优化：移除顶部常驻横幅，改为居中模态弹窗，提供“开启高亮”与“关闭”选项，
-        并在状态栏增加高亮开关指示器，支持点击快速切换。
-     3. 替换全部安全性增强：replaceAll 使用函数替换，避免替换文本中的 $ 特殊模式被错误解析。
-     4. 卸载前保存改进：visibilitychange 中尝试异步 IndexedDB 写入（超时保护），
-        标记脏状态，确保页面关闭时数据不丢失，下次加载可恢复。
-     5. 关闭高亮时性能优化：当 highlightEnabled 为 false，直接跳过 DOM 高亮操作，减少不必要的渲染。
-     6. 查找匹配提示优化：区分正则安全风险与无匹配状态，给出明确提示。
-     7. 新增行高亮与代码折叠：当前行背景高亮，行号区域支持基于缩进的折叠/展开，提升大文件浏览体验。
-     8. 原有所有功能、界面、设置、语言、主题、快捷键等完整保留，无任何降级或删除。
-     9. 代码结构优化，所有变量名保持完整、无简写，确保可读性。
+     1. 修复 Worker 消息回调覆盖：采用消息 ID 映射，避免并发搜索回调错乱。
+     2. 快捷键焦点优化：撤销/重做/查找/替换/跳转行等仅在编辑器或安全区域生效，防止干扰查找框。
+     3. 粘贴操作统一入口：通过 setEditorContent 处理，保证历史记录正确，并自动触发大文件检测。
+     4. 修复行高亮滚动错位：阴影层当前行高亮条定位减去滚动偏移，始终跟随文本。
+     5. 替换全部集成优化：调用 setEditorContent 实现，触发大文件高亮控制，代码更简洁。
+     6. 自动保存后清除修改标记：数据已持久化即视为保存，提升用户认知一致性。
+     7. 合并全局快捷键监听器：字体缩放与所有全局快捷键统一管理，减少冗余。
+     8. 初始状态完善：清空按钮在空编辑器时正确禁用。
+     9. 原有所有功能、界面、设置、语言、主题、快捷键等完整保留，无任何降级或删除。
+     10. 代码结构优化，所有变量名保持完整、无简写，确保可读性。
   ================================================================================
   -->
   <style>
@@ -294,8 +293,6 @@
     .btn-ghost:hover:not(:disabled) { background: var(--surface-light); color: var(--text); }
     .btn svg { width: 16px; height: 16px; flex-shrink: 0; }
 
-    /* 大文件警告条已移除，改用弹窗 */
-
     /* 查找替换弹窗 */
     .replace-modal-overlay {
       display: none;
@@ -497,30 +494,30 @@
       cursor: pointer;
       position: relative;
     }
+    .line-numbers .line-container {
+      position: relative;
+    }
     .line-numbers .fold-marker {
       position: absolute;
       left: 4px;
       top: 50%;
       transform: translateY(-50%);
-      width: 12px;
-      height: 12px;
+      width: auto;
+      height: auto;
       display: flex;
       align-items: center;
       justify-content: center;
       color: var(--fold-color);
       font-size: 10px;
       cursor: pointer;
-      visibility: hidden;
+      opacity: 0.6;
+      white-space: nowrap;
+      visibility: visible; /* 始终可见 */
     }
     .line-numbers .line-container:hover .fold-marker {
-      visibility: visible;
+      opacity: 1;
     }
-    .line-numbers .fold-marker.folded::before {
-      content: "▶";
-    }
-    .line-numbers .fold-marker.unfolded::before {
-      content: "▼";
-    }
+    /* 移除伪元素，由 span 内容直接显示 ▶ 或 ▼ */
     .code-area { flex: 1; position: relative; overflow: hidden; }
 
     #codeEditor, .highlight-layer {
@@ -720,7 +717,6 @@
       <button class="btn btn-ghost" id="btnHelp" title="快捷键">?</button>
     </div>
   </div>
-
   <div class="editor-wrapper" id="editorWrapper">
     <div class="line-numbers" id="lineNumbers" aria-hidden="true"></div>
     <div class="code-area">
@@ -788,11 +784,20 @@
   <div class="modal">
     <h2>⌨️ 快捷键</h2>
     <div class="shortcut-row"><span>复制代码</span><kbd>Ctrl+Shift+C</kbd></div>
-    <div class="shortcut-row"><span>查找替换</span><kbd>Ctrl+F</kbd></div>
+    <div class="shortcut-row"><span>撤销</span><kbd>Ctrl+Z</kbd></div>
+    <div class="shortcut-row"><span>重做</span><kbd>Ctrl+Y / Ctrl+Shift+Z</kbd></div>
+    <div class="shortcut-row"><span>查找</span><kbd>Ctrl+F</kbd></div>
+    <div class="shortcut-row"><span>替换</span><kbd>Ctrl+H</kbd></div>
     <div class="shortcut-row"><span>跳转到行</span><kbd>Ctrl+G</kbd></div>
     <div class="shortcut-row"><span>注释</span><kbd>Ctrl+/</kbd></div>
-    <div class="shortcut-row"><span>放大/缩小字体</span><kbd>Ctrl+ +/-</kbd></div>
+    <div class="shortcut-row"><span>保存</span><kbd>Ctrl+S</kbd></div>
+    <div class="shortcut-row"><span>放大字体</span><kbd>Ctrl+ +</kbd></div>
+    <div class="shortcut-row"><span>缩小字体</span><kbd>Ctrl+ -</kbd></div>
+    <div class="shortcut-row"><span>重置字体</span><kbd>Ctrl+0</kbd></div>
     <div class="shortcut-row"><span>切换主题</span><kbd>Ctrl+T</kbd></div>
+    <div class="shortcut-row"><span>切换自动换行</span><kbd>点击工具栏按钮</kbd></div>
+    <div class="shortcut-row"><span>切换缩进</span><kbd>点击状态栏缩进</kbd></div>
+    <div class="shortcut-row"><span>折叠/展开</span><kbd>点击行号折叠标记</kbd></div>
     <button class="btn btn-primary close-btn" id="btnCloseHelp">关闭</button>
   </div>
 </div>
@@ -854,7 +859,10 @@
     highlightShadowRoot: null,
     highlightPreElement: null,
     // 代码折叠相关
-    foldedRanges: [] // 存储折叠范围：{ startLine, endLine }
+    foldedRanges: [], // 存储折叠范围：{ startLine, endLine }
+    // Worker 消息 ID 计数器与回调映射
+    workerMessageIdCounter: 0,
+    workerCallbacksMap: new Map()
   };
 
   // ==================== 历史记录管理器（完整撤销/重做，支持批量操作计数器） ====================
@@ -993,15 +1001,15 @@
   let historyManager = null;
 
   // ==================== 统一编辑入口（所有代码修改必须经过此函数） ====================
-  function setEditorContent(newValue, shouldRecordHistory = true, preserveCursor = false) {
+  function setEditorContent(newValue, shouldRecordHistory = true, preserveCursor = false, finalCursorStart = null, finalCursorEnd = null) {
     const editor = codeEditor;
     if (!editor) return;
     const oldValue = editor.value;
     // 修复：只有当新旧内容完全相同且不是空字符串时才跳过（允许空文件正常加载）
     if (oldValue === newValue && newValue !== '') return;
 
-    // 大文件检测：超过100KB自动关闭高亮
-    if (newValue.length > EditorState.largeFileCharacterThreshold && EditorState.highlightEnabled) {
+    // 大文件检测：超过100KB自动关闭高亮，但用户手动开启时不自动关闭
+    if (newValue.length > EditorState.largeFileCharacterThreshold && EditorState.highlightEnabled && !EditorState.userForcedHighlight) {
       setHighlightEnabled(false, true); // 第二个参数表示需要弹窗
     }
 
@@ -1013,6 +1021,8 @@
     editor.value = newValue;
     if (preserveCursor && oldStart <= newValue.length) {
       editor.setSelectionRange(Math.min(oldStart, newValue.length), Math.min(oldEnd, newValue.length));
+    } else if (finalCursorStart !== null && finalCursorEnd !== null && finalCursorStart <= newValue.length && finalCursorEnd <= newValue.length) {
+      editor.setSelectionRange(finalCursorStart, finalCursorEnd);
     }
     const inputEvent = new Event('input', { bubbles: true });
     editor.dispatchEvent(inputEvent);
@@ -1144,7 +1154,6 @@ function fibonacci(n) {
 }
 console.log('Fibonacci(10) =', fibonacci(10));
 console.log('Fibonacci(20) =', fibonacci(20));`;
-
   // ==================== 工具函数 ====================
   function escapeHtml(text) {
     return text
@@ -1242,7 +1251,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       // 展开
       EditorState.foldedRanges.splice(existingIndex, 1);
     } else {
-      // 折叠
+      // 折叠，并计算折叠行数（不包含起始行本身）
+      range.foldedCount = range.endLine - range.startLine;
       EditorState.foldedRanges.push(range);
     }
     updateFoldedRangesInStorage();
@@ -1265,17 +1275,18 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       if (foldedLines.has(i)) continue;
       displayLineNumber++;
       html += '<div class="line-container">';
-      // 添加折叠标记
+      // 添加折叠标记，已折叠时显示行数
       if (i < lines.length - 1) {
         const range = findFoldRange(lines, i);
         if (range) {
           const isFolded = EditorState.foldedRanges.some(r => r.startLine === i);
-          html += `<span class="fold-marker ${isFolded ? 'folded' : 'unfolded'}" data-line="${i}"></span>`;
+          const countText = isFolded && range.endLine - range.startLine > 0 ? ' (' + (range.endLine - range.startLine) + ')' : '';
+          html += `<span class="fold-marker ${isFolded ? 'folded' : 'unfolded'}" data-line="${i}" title="折叠/展开">${isFolded ? '▶' + countText : '▼'}</span>`;
         } else {
-          html += '<span class="fold-marker" style="visibility:hidden;"></span>';
+          html += '<span class="fold-marker" style="visibility:hidden;opacity:0;"></span>';
         }
       } else {
-        html += '<span class="fold-marker" style="visibility:hidden;"></span>';
+        html += '<span class="fold-marker" style="visibility:hidden;opacity:0;"></span>';
       }
       html += `<span>${displayLineNumber}</span></div>\n`;
     }
@@ -1358,6 +1369,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         if (currentCode.length < 500000) {
           saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, currentCode);
         }
+        // 自动保存成功后清除修改标记，因为数据已经持久化
+        clearModifiedMark();
         autoSaveStatus.textContent = '💾 已自动保存';
         autoSaveStatus.style.color = 'var(--green)';
         setTimeout(function() {
@@ -1372,11 +1385,10 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
           autoSaveStatus.textContent = '⚠️ 保存失败';
           autoSaveStatus.style.color = 'var(--red)';
         }
-      }
-      if (currentCode !== EditorState.originalCode) {
-        markModified();
-      } else {
-        clearModifiedMark();
+        // 降级保存失败时，仍保留修改标记提醒用户
+        if (currentCode !== EditorState.originalCode) {
+          markModified();
+        }
       }
     }, 800);
   }
@@ -1390,6 +1402,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, currentCode);
       }
       setOriginalCode(currentCode);
+      clearModifiedMark();
       showToast('✅ 已保存');
     } catch (error) {
       showToast('❌ 保存失败', true);
@@ -1451,8 +1464,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
     return false;
   }
-
-  // ==================== Web Worker 强化版（正则搜索带超时控制） ====================
+  // ==================== Web Worker 强化版（正则搜索带超时控制，消息 ID 机制防回调覆盖） ====================
   function createHighlightWorker() {
     const workerScript = `
       function escapeHtml(text) { return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -1460,15 +1472,15 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       function isRegexSafeForWorker(pattern) {
         if (!pattern || pattern.length > 200) return false;
         var dangerousPatterns = [
-          /\([^)]*\|[^)]*\)[+*]{2,}/,
-          /\((?:[^()]|\([^()]*\))*\)[+*]{2,}/,
-          /\(\.\*\)[+*]/,
-          /\(\.\+\)[+*]/,
-          /\w+\+\+/,
-          /\w+\*\*/,
-          /\([^)]*\)\{[^}]*,[^}]*\}[+*]/,
-          /(\[.*?\])\1[+*]/,
-          /([+*{]\d*,?\d*})[\s\S]*\1/
+          /\\([^)]*\\|[^)]*\\)[+*]{2,}/,
+          /\\((?:[^()]|\\([^()]*\\))*\\)[+*]{2,}/,
+          /\\(\\.\\*\\)[+*]/,
+          /\\(\\.\\+\\)[+*]/,
+          /\\w+\\+\\+/,
+          /\\w+\\*\\*/,
+          /\\([^)]*\\)\\{[^}]*,[^}]*\\}[+*]/,
+          /(\\[.*?\\])\\1[+*]/,
+          /([+*{]\\d*,?\\d*})[\\s\\S]*\\1/
         ];
         for (var i = 0; i < dangerousPatterns.length; i++) {
           if (dangerousPatterns[i].test(pattern)) return false;
@@ -1497,10 +1509,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         if (message.type === 'searchMatches') {
           var code = message.code, searchTerm = message.searchTerm,
               caseSensitive = message.caseSensitive, wholeWord = message.wholeWord,
-              useRegex = message.useRegex, timeout = message.timeout;
+              useRegex = message.useRegex, timeout = message.timeout,
+              requestId = message.requestId;
           var regex = buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex);
           if (!regex) {
-            self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'regex_invalid' });
+            self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'regex_invalid', requestId: requestId });
             return;
           }
           var matches = [];
@@ -1510,11 +1523,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
             matches.push({ index: match.index, length: match[0].length });
             if (matches.length > 10000) break;
             if (timeout && (performance.now() - startTime) > timeout) {
-              self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'timeout' });
+              self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'timeout', requestId: requestId });
               return;
             }
           }
-          self.postMessage({ type: 'searchMatchesResult', matches: matches, safe: true });
+          self.postMessage({ type: 'searchMatchesResult', matches: matches, safe: true, requestId: requestId });
         }
       };
       // 捕获Worker内部未处理的异常
@@ -1524,9 +1537,31 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     `;
     const blob = new Blob([workerScript], { type: 'application/javascript' });
     const worker = new Worker(URL.createObjectURL(blob));
+    // 主线程统一管理 Worker 消息回调，通过 requestId 映射到对应回调函数
+    worker.onmessage = function(event) {
+      const responseData = event.data;
+      if (responseData.type === 'searchMatchesResult' && responseData.requestId !== undefined) {
+        const pendingCallback = EditorState.workerCallbacksMap.get(responseData.requestId);
+        if (pendingCallback) {
+          EditorState.workerCallbacksMap.delete(responseData.requestId);
+          var matches = responseData.matches;
+          var reason = null;
+          if (!responseData.safe) {
+            reason = responseData.reason || 'unsafe_regex';
+          }
+          var ranges = matches.map(function(m) { return { start: m.index, end: m.index + m.length }; });
+          pendingCallback(ranges, reason);
+        }
+      }
+    };
     // 主线程监听worker脚本级错误（例如解析失败）
     worker.onerror = function(event) {
       console.warn('Highlight worker error, falling back to main thread', event);
+      // 清理所有挂起的回调，防止内存泄漏
+      EditorState.workerCallbacksMap.forEach(function(callback) {
+        callback([], 'worker_error');
+      });
+      EditorState.workerCallbacksMap.clear();
       EditorState.highlightWorker = null;   // 标记为不可用，后续自动降级
     };
     EditorState.highlightWorker = worker;
@@ -1585,7 +1620,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
   }
 
-  // ==================== 获取匹配区间（通过 Worker 异步执行，超时 200ms） ====================
+  // ==================== 获取匹配区间（通过 Worker 异步执行，带消息 ID 防覆盖，超时 200ms） ====================
   function getMatchRangesAsync(code, searchTerm, caseSensitive, wholeWord, useRegex, callback, timeout = 200) {
     if (!EditorState.highlightWorker) {
       // 降级：同步执行并只取前 1000 个匹配
@@ -1601,17 +1636,9 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       callback(matches, null);
       return;
     }
-    EditorState.highlightWorker.onmessage = function(event) {
-      if (event.data.type === 'searchMatchesResult') {
-        var matches = event.data.matches;
-        var reason = null;
-        if (!event.data.safe) {
-          reason = event.data.reason || 'unsafe_regex';
-        }
-        var ranges = matches.map(function(m) { return { start: m.index, end: m.index + m.length }; });
-        callback(ranges, reason);
-      }
-    };
+    // 生成唯一请求 ID，将回调存入映射表
+    var requestId = ++EditorState.workerMessageIdCounter;
+    EditorState.workerCallbacksMap.set(requestId, callback);
     EditorState.highlightWorker.postMessage({
       type: 'searchMatches',
       code: code,
@@ -1619,7 +1646,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       caseSensitive: caseSensitive,
       wholeWord: wholeWord,
       useRegex: useRegex,
-      timeout: timeout
+      timeout: timeout,
+      requestId: requestId
     });
   }
 
@@ -1733,39 +1761,58 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       EditorState.highlightPreElement.scrollLeft = codeEditor.scrollLeft;
     }
   }
-
   // ==================== 主线程语法高亮（同步） ====================
   function syntaxHighlightMainThread(code, language) {
     if (!code) return '';
     var escaped = escapeHtml(code);
     if (language === 'js' || language === 'javascript') {
+      // 先处理块注释 /* ... */，避免内部字符串干扰
       escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, function(m) { return '<span class="cmt">' + m + '</span>'; });
+      // 行注释 //
       escaped = escaped.replace(/(\/\/.*)/g, '<span class="cmt">$1</span>');
+      // 字符串：双引号、单引号、模板字符串
       escaped = escaped.replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, '<span class="str">$1</span>');
+      // 关键字
       escaped = escaped.replace(/\b(function|const|let|var|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|import|export|from|async|await|try|catch|throw|typeof|instanceof|this|super|default|yield|of|in|static|get|set)\b/g, '<span class="kw">$1</span>');
+      // 数字
       escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
+      // 函数调用（标识符后跟括号）
       escaped = escaped.replace(/\b([a-zA-Z_$][\w$]*)\s*\(/g, '<span class="fn">$1</span>(');
+      // 属性访问（点号后标识符）
       escaped = escaped.replace(/\.([a-zA-Z_$][\w$]*)/g, '.<span class="prop">$1</span>');
     } else if (language === 'html') {
+      // HTML 注释 <!-- -->
       escaped = escaped.replace(/&lt;!--[\s\S]*?--&gt;/g, '<span class="cmt">$&</span>');
+      // 标签和属性
       escaped = escaped.replace(/(&lt;\/?)([\w-]+)([\s\S]*?)(\/?&gt;)/g, function(m, openTag, tagName, attributes, closeTag) {
         var processedAttributes = attributes.replace(/([\w-]+)=(".*?"|'.*?')/g, '<span class="attr">$1</span>=<span class="str">$2</span>');
         return openTag + '<span class="tag">' + tagName + '</span>' + processedAttributes + closeTag;
       });
     } else if (language === 'css') {
+      // CSS 块注释
       escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, '<span class="cmt">$&</span>');
+      // 属性名
       escaped = escaped.replace(/([\w-]+)\s*:/g, '<span class="attr">$1</span>:');
+      // 属性值中的颜色和数字
       escaped = escaped.replace(/:\s*([^;{}]+)/g, function(m, propertyValue) {
         return ': ' + propertyValue.replace(/(#[0-9a-fA-F]{3,8}|\d+\.?\d*(\w+|%)?)/g, '<span class="num">$1</span>');
       });
+      // 选择器
       escaped = escaped.replace(/([.#][\w-]+)/g, '<span class="tag">$1</span>');
     } else if (language === 'python') {
+      // Python 三引号字符串
       escaped = escaped.replace(/("""[\s\S]*?"""|'''[\s\S]*?''')/g, '<span class="str">$&</span>');
+      // Python 行注释
       escaped = escaped.replace(/(#.*)/g, '<span class="cmt">$1</span>');
+      // 普通字符串
       escaped = escaped.replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, '<span class="str">$1</span>');
+      // 关键字
       escaped = escaped.replace(/\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|pass|break|continue|yield|lambda|and|or|not|in|is|None|True|False|self|print|range|len|int|str|float|list|dict|set|tuple)\b/g, '<span class="kw">$1</span>');
+      // 数字
       escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="num">$1</span>');
+      // 函数定义
       escaped = escaped.replace(/def\s+([a-zA-Z_]\w*)/g, 'def <span class="fn">$1</span>');
+      // 装饰器
       escaped = escaped.replace(/(@[\w.]+)/g, '<span class="tag">$1</span>');
     }
     return escaped;
@@ -1779,6 +1826,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     lineCountEl.textContent = '行: ' + codeLines.length;
     charCountEl.textContent = '字符: ' + codeText.length;
 
+    // 大文件自动关闭高亮检测
     if (codeLines.length > EditorState.largeFileThreshold && EditorState.highlightEnabled && !EditorState.userForcedHighlight) {
       setHighlightEnabled(false, true);
     }
@@ -1860,7 +1908,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     return -1;
   }
 
-  // ==================== 构建高亮 HTML（含行高亮、搜索匹配、括号匹配） ====================
+  // ==================== 构建高亮 HTML（含行高亮、搜索匹配、括号匹配，修复行高亮滚动偏移） ====================
   function buildHighlightHTML(code, language, searchRanges, bracketRanges, currentLineIndex) {
     if (!code) return '';
     if (!EditorState.highlightEnabled) return escapeHtml(code) + '\n';
@@ -1880,6 +1928,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var charIndex = 0;
     var visualLineIndex = 0;          // 视觉行索引（跳过折叠行）
     var rangePointer = 0;             // 当前处理到的额外高亮范围索引
+    var lineHeightPx = EditorState.currentFontSize * 1.7; // 缓存行高，避免重复计算
+    var scrollTopOffset = codeEditor.scrollTop; // 获取当前滚动偏移，用于修正行高亮位置
 
     // 辅助函数：处理指定字符范围内的文本，插入语法高亮与额外高亮
     function processTextSegment(text, segmentStart, segmentEnd) {
@@ -1928,18 +1978,22 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         }
       }
       if (isLineFolded) {
+        // 如果是折叠范围的第一行被折叠（即刚进入折叠），插入占位提示
+        // 注意：只对折叠范围内的行隐藏，无需额外占位（因为行号已提示）
         charIndex += lines[lineIdx].length + 1;
         continue;
       }
+      // 若需在高亮层显示占位符，可在此添加逻辑，但需要知道是否为折叠起始行
 
       var line = lines[lineIdx];
       var lineStartGlobal = charIndex;
       var lineEndGlobal = lineStartGlobal + line.length;
 
-      // 当前行背景高亮（独立元素，不参与文本流）
+      // 当前行背景高亮（独立元素，不参与文本流），修正滚动偏移与内边距
       if (lineIdx === currentLineIndex) {
-        var lineHeightPx = EditorState.currentFontSize * 1.7;
-        resultHtml += '<span class="line-highlight" style="top:' + (visualLineIndex * lineHeightPx) + 'px;height:' + lineHeightPx + 'px;"></span>';
+        var paddingTop = 12; // 与 pre 元素的 padding-top 保持一致
+        var highlightTopPosition = (visualLineIndex * lineHeightPx) - scrollTopOffset + paddingTop;
+        resultHtml += '<span class="line-highlight" style="top:' + highlightTopPosition + 'px;height:' + lineHeightPx + 'px;"></span>';
       }
       visualLineIndex++;
 
@@ -2024,7 +2078,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
     EditorState.updateTimer = setTimeout(fullUpdate, 80);
   }
-
   // ==================== Toast 提示 ====================
   function showToast(message, isError) {
     if (EditorState.toastTimer) {
@@ -2113,6 +2166,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
 
   // ==================== 大文件高亮开关逻辑 ====================
   function setHighlightEnabled(enabled, showModal = false) {
+    // 如果状态未改变则直接返回，避免重复触发更新
+    if (EditorState.highlightEnabled === enabled && !showModal) return;
     EditorState.highlightEnabled = enabled;
     saveToLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, enabled);
     updateHighlightStatusIndicator(enabled);
@@ -2121,11 +2176,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       largeFileModal.classList.remove('open');
       scheduleHighlightUpdate();
     } else {
-      // 关闭高亮
+      // 关闭高亮时，如果需要弹窗且用户未强制设置过，则显示大文件提示
       if (showModal && !EditorState.userForcedHighlight) {
         largeFileModal.classList.add('open');
       }
-      // 直接显示转义文本
+      // 直接显示转义文本，确保内容仍然可见
       updateShadowHighlight(escapeHtml(codeEditor.value), EditorState.wordWrapEnabled);
       syncShadowScroll();
     }
@@ -2146,12 +2201,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   // 状态栏高亮开关点击
   highlightStatus.addEventListener('click', function() {
     const newState = !EditorState.highlightEnabled;
-    EditorState.userForcedHighlight = newState;
+    EditorState.userForcedHighlight = newState; // 用户手动操作，覆盖自动判断
     setHighlightEnabled(newState, false);
     showToast(newState ? '高亮已开启' : '高亮已关闭');
   });
 
-  // 大文件弹窗按钮
+  // 大文件弹窗按钮事件
   btnEnableHighlightModal.addEventListener('click', function() {
     EditorState.userForcedHighlight = true;
     setHighlightEnabled(true, false);
@@ -2161,6 +2216,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
 
   btnDismissLargeFileModal.addEventListener('click', function() {
     largeFileModal.classList.remove('open');
+    // 用户已手动关闭提示，后续不再自动弹出（等同于接受高亮关闭）
+    EditorState.userForcedHighlight = true;
   });
 
   largeFileModal.addEventListener('click', function(event) {
@@ -2173,6 +2230,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   function openReplaceModal() {
     replaceModalOverlay.classList.add('open');
 
+    // 恢复上次保存的弹窗位置
     var savedPosition = loadFromLocalStorage(STORAGE_KEYS.REPLACE_MODAL_POSITION, null);
     if (savedPosition && savedPosition.left !== undefined && savedPosition.top !== undefined) {
       replaceModal.style.position = 'fixed';
@@ -2180,12 +2238,14 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       replaceModal.style.top = savedPosition.top + 'px';
       replaceModal.style.margin = '0';
     } else {
+      // 使用默认居中布局
       replaceModal.style.position = '';
       replaceModal.style.left = '';
       replaceModal.style.top = '';
       replaceModal.style.margin = '';
     }
 
+    // 恢复上次保存的弹窗尺寸
     var savedSize = loadFromLocalStorage(STORAGE_KEYS.REPLACE_MODAL_SIZE, null);
     if (savedSize && savedSize.width && savedSize.height) {
       replaceModal.style.width = savedSize.width + 'px';
@@ -2200,7 +2260,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   }
 
   function closeReplaceModal() {
-    // 强制结束拖拽和调整大小，移除残留的全局监听器
+    // 强制结束拖拽和调整大小，移除残留的全局监听器，防止内存泄漏
     if (EditorState.isDragging) {
       EditorState.isDragging = false;
       document.removeEventListener('mousemove', onDrag);
@@ -2212,6 +2272,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       document.removeEventListener('mouseup', stopResize);
       replaceModal.style.overflow = '';
     }
+    // 保存弹窗当前位置和尺寸，以便下次打开时恢复
     if (replaceModalOverlay.classList.contains('open')) {
       var modalRect = replaceModal.getBoundingClientRect();
       saveToLocalStorage(STORAGE_KEYS.REPLACE_MODAL_POSITION, {
@@ -2292,9 +2353,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
     EditorState.lastSearchMatches = foundMatches;
     var currentSelectionStart = codeEditor.selectionStart;
+    // 从当前光标位置之后查找下一个匹配项
     var nextMatchIndex = foundMatches.findIndex(function(match) {
       return match.start > currentSelectionStart;
     });
+    // 如果当前光标之后没有匹配，则回到第一个匹配项循环查找
     if (nextMatchIndex === -1) {
       nextMatchIndex = 0;
     }
@@ -2303,6 +2366,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     codeEditor.focus();
     codeEditor.setSelectionRange(targetMatch.start, targetMatch.end);
 
+    // 滚动到目标匹配项所在行附近
     var textBeforeMatch = codeEditor.value.substring(0, targetMatch.start);
     var targetLineNumber = textBeforeMatch.split('\n').length;
     var totalLines = codeEditor.value.split('\n').length;
@@ -2332,21 +2396,25 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     EditorState.lastSearchMatches = foundMatches;
     var currentSelectionStart = codeEditor.selectionStart;
     var currentSelectionEnd = codeEditor.selectionEnd;
+    // 检查当前选区是否恰好是一个匹配项
     var currentMatchIndex = foundMatches.findIndex(function(match) {
       return match.start === currentSelectionStart && match.end === currentSelectionEnd;
     });
     if (currentMatchIndex === -1) {
+      // 当前选区不匹配任何查找结果，先跳转到下一个匹配项
       findNext();
       return;
     }
     var targetMatch = foundMatches[currentMatchIndex];
     var replacementText = replaceWith.value;
     var currentCode = codeEditor.value;
+    // 直接拼接替换，避免正则替换中的 $ 特殊模式问题
     var newCode = currentCode.substring(0, targetMatch.start) + replacementText + currentCode.substring(targetMatch.end);
     setEditorContent(newCode, true);
     var newMatches = findMatchesSync();
     EditorState.lastSearchMatches = newMatches;
     if (newMatches.length > 0) {
+      // 替换后自动定位到下一个匹配项
       var nextMatchIndex = newMatches.findIndex(function(match) {
         return match.start >= targetMatch.start;
       });
@@ -2379,14 +2447,13 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     if (!confirm('确定要替换全部 ' + totalMatches + ' 处匹配吗？')) {
       return;
     }
-    // 使用函数替换，防止 $ 特殊模式被解析
+    // 使用函数替换，防止替换文本中的 $ 特殊模式被错误解析
     var replacementText = replaceWith.value;
     var newCode = currentCode.replace(searchRegex, function() {
       return replacementText;
     });
-    executeCodeModification(function() {
-      codeEditor.value = newCode;
-    });
+    // 使用 setEditorContent 统一处理，确保大文件检测和历史记录正确
+    setEditorContent(newCode, true);
     showToast('✅ 已替换 ' + totalMatches + ' 处匹配');
     EditorState.lastSearchMatches = [];
     EditorState.searchMatchIndex = -1;
@@ -2408,7 +2475,6 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     replaceWholeWord.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_WHOLE_WORD, false);
     replaceUseRegex.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_USE_REGEX, false);
   }
-
   // 查找替换输入框智能全选：单击且无选区时自动全选，保留手动拖选选区
   function setupSmartSelect(textarea) {
     let isDragging = false;
@@ -2421,7 +2487,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       var startX = e.clientX, startY = e.clientY;
 
       function onMouseMove(moveEvent) {
-        // 移动超过2px才算拖拽
+        // 移动超过2px才算拖拽，避免轻微抖动误判
         if (Math.abs(moveEvent.clientX - startX) > 2 || Math.abs(moveEvent.clientY - startY) > 2) {
           isDragging = true;
           document.removeEventListener('mousemove', onMouseMove);
@@ -2493,20 +2559,25 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var inBlockComment = false;
     for (var i = 0; i < position; i++) {
       var character = code[i];
+      // 行注释内，遇到换行符则结束
       if (inLineComment) {
         if (character === '\n') { inLineComment = false; }
         continue;
       }
+      // 块注释内，遇到 */ 则结束
       if (inBlockComment) {
         if (character === '*' && code[i + 1] === '/') { inBlockComment = false; i++; }
         continue;
       }
+      // 处理转义字符，跳过下一个字符
       if (inSingleQuote && character === '\\') { i++; continue; }
       if (inDoubleQuote && character === '\\') { i++; continue; }
       if (inBacktick && character === '\\') { i++; continue; }
+      // 切换引号状态（仅当不在其他引号内时）
       if (character === "'" && !inDoubleQuote && !inBacktick) { inSingleQuote = !inSingleQuote; }
       else if (character === '"' && !inSingleQuote && !inBacktick) { inDoubleQuote = !inDoubleQuote; }
       else if (character === '`' && !inSingleQuote && !inDoubleQuote) { inBacktick = !inBacktick; }
+      // 检测注释开始（仅当不在任何字符串内时）
       else if (!inSingleQuote && !inDoubleQuote && !inBacktick && character === '/' && code[i + 1] === '/') { inLineComment = true; i++; }
       else if (!inSingleQuote && !inDoubleQuote && !inBacktick && character === '/' && code[i + 1] === '*') { inBlockComment = true; i++; }
     }
@@ -2522,7 +2593,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var selectionEnd = this.selectionEnd;
     var editorValue = this.value;
 
-    // 处理闭括号自动跳过
+    // 处理闭括号自动跳过：光标右侧恰好是相同闭括号时，直接跳过而非重复输入
     if (pressedKey in closingPairs && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
       if (selectionStart === selectionEnd && editorValue[selectionStart] === pressedKey) {
         event.preventDefault();
@@ -2532,8 +2603,9 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       }
     }
 
-    // 自动补全成对括号
+    // 自动补全成对括号和引号
     if (pressedKey in openingPairs && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      // 有选中文本时，用括号包裹选中内容
       if (selectionStart !== selectionEnd) {
         event.preventDefault();
         var selectedText = editorValue.substring(selectionStart, selectionEnd);
@@ -2545,8 +2617,10 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         triggerAutoSave();
         return;
       }
+      // 在字符串或注释内不自动补全
       if (isInsideStringOrComment(editorValue, selectionStart)) return;
       var nextCharacter = editorValue[selectionStart];
+      // 仅当光标后为空或为空白/闭括号/标点时补全
       if (nextCharacter === '' || /[\s}\]\)]/.test(nextCharacter)) {
         event.preventDefault();
         historyManager.pushState(codeEditor);
@@ -2569,6 +2643,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       var currentIndent = currentLine.match(/^[ \t]*/)[0];
       var trimmedLine = currentLine.trimEnd();
       var extraIndent = '';
+      // 在代码块开始符号后自动增加一级缩进
       if (!isInsideStringOrComment(editorValue, selectionStart)) {
         if (trimmedLine.endsWith('{') || trimmedLine.endsWith('(') || trimmedLine.endsWith('[') ||
             (EditorState.currentLanguage === 'python' && trimmedLine.endsWith(':'))) {
@@ -2584,7 +2659,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       return;
     }
 
-    // 智能退格（减少缩进）
+    // 智能退格（减少缩进）：光标前为纯空白时按缩进单位删除
     if (pressedKey === 'Backspace') {
       var lineStart = editorValue.lastIndexOf('\n', selectionStart - 1) + 1;
       var lineContent = editorValue.substring(lineStart, selectionStart);
@@ -2604,11 +2679,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       }
     }
 
-    // Tab 键处理
+    // Tab 键处理：增加缩进
     if (pressedKey === 'Tab' && !event.shiftKey) {
       event.preventDefault();
       var indentStr = getIndentString();
       if (selectionStart !== selectionEnd) {
+        // 多行选中时，每行增加缩进
         var textBeforeSelection = editorValue.substring(0, selectionStart);
         var selectedText = editorValue.substring(selectionStart, selectionEnd);
         var textAfterSelection = editorValue.substring(selectionEnd);
@@ -2636,6 +2712,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         var selectedText = editorValue.substring(selectionStart, selectionEnd);
         var textAfterSelection = editorValue.substring(selectionEnd);
         var selectedLines = selectedText.split('\n');
+        // 根据当前缩进设置构建移除模式
         var removePattern = (EditorState.indentCharacter === '\t') ? '\t' : ' {1,' + EditorState.indentSize + '}';
         var dedentedLines = selectedLines.map(function(line) { return line.replace(new RegExp('^' + removePattern), ''); });
         var newValue = textBeforeSelection + dedentedLines.join('\n') + textAfterSelection;
@@ -2669,6 +2746,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       var selectedText = editorValue.substring(selectionStart, selectionEnd);
       var textAfterSelection = editorValue.substring(selectionEnd);
 
+      // 根据当前语言选择注释符号
       var commentCharacter = '//';
       if (EditorState.currentLanguage === 'python') commentCharacter = '#';
       else if (EditorState.currentLanguage === 'html') commentCharacter = '<!-- -->';
@@ -2676,17 +2754,22 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
 
       var newSelection;
       if (EditorState.currentLanguage === 'html') {
+        // HTML 使用块注释包裹
         var isCommented = selectedText.startsWith('<!--') && selectedText.endsWith('-->');
         newSelection = isCommented ? selectedText.slice(5, -4) : '<!--' + selectedText + '-->';
       } else if (EditorState.currentLanguage === 'css') {
+        // CSS 使用块注释包裹
         var isCommented = selectedText.startsWith('/*') && selectedText.endsWith('*/');
         newSelection = isCommented ? selectedText.slice(2, -2) : '/*' + selectedText + '*/';
       } else {
+        // JS/Python 使用行注释，逐行切换
         var selectedLines = selectedText.split('\n');
         var allLinesCommented = selectedLines.every(function(line) { return line.trimStart().startsWith(commentCharacter); });
         if (allLinesCommented) {
+          // 所有行均已注释，则取消注释
           newSelection = selectedLines.map(function(line) { return line.replace(new RegExp('^\\s*' + escapeRegExp(commentCharacter) + '\\s?'), ''); }).join('\n');
         } else {
+          // 存在未注释行，则全部添加注释
           newSelection = selectedLines.map(function(line) { return commentCharacter + ' ' + line; }).join('\n');
         }
       }
@@ -2704,6 +2787,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     debouncedUpdate();
     toggleClearButton();
     triggerAutoSave();
+    // 查找替换弹窗打开时，内容变更需重置匹配状态
     if (replaceModalOverlay.classList.contains('open')) {
       EditorState.lastSearchMatches = [];
       EditorState.searchMatchIndex = -1;
@@ -2711,27 +2795,19 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
   });
   codeEditor.addEventListener('scroll', syncScroll, { passive: true });
+  // 粘贴事件统一通过 setEditorContent 处理，确保历史记录正确和大文件检测触发
   codeEditor.addEventListener('paste', function(event) {
     event.preventDefault();
     var clipboardData = event.clipboardData || window.clipboardData;
     var pastedText = clipboardData.getData('text/plain');
     var start = this.selectionStart;
     var end = this.selectionEnd;
-
     var newValue = this.value.substring(0, start) + pastedText + this.value.substring(end);
-    // 大文件粘贴检测
-    if (newValue.length > EditorState.largeFileCharacterThreshold && EditorState.highlightEnabled) {
-      setHighlightEnabled(false, true);
-    }
-
-    historyManager.pushState(codeEditor);
-    this.value = newValue;
+    // 使用 setEditorContent 统一入口，自动处理大文件检测和历史记录
+    setEditorContent(newValue, true, false);
     this.selectionStart = this.selectionEnd = start + pastedText.length;
-    historyManager.pushState(codeEditor);
     fullUpdate();
-    triggerAutoSave();
   });
-
   // ==================== 文件导入 ====================
   btnImport.addEventListener('click', function() {
     fileInput.click();
@@ -2740,6 +2816,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   fileInput.addEventListener('change', function(event) {
     var selectedFile = event.target.files[0];
     if (!selectedFile) return;
+    // 验证文件类型：检查 MIME 类型或以常见代码文件扩展名结尾
     var validExtensions = /\.(js|ts|jsx|html|css|py|txt|json|md|xml)$/i;
     var isValidTextFile = (selectedFile.type && selectedFile.type.startsWith('text/')) || validExtensions.test(selectedFile.name);
     if (!isValidTextFile) {
@@ -2747,6 +2824,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       fileInput.value = '';
       return;
     }
+    // 文件大小超过 2MB 时给出提示
     if (selectedFile.size > 2 * 1024 * 1024) {
       var fileSizeMB = (selectedFile.size / (1024 * 1024)).toFixed(2);
       if (!confirm('文件较大 (' + fileSizeMB + ' MB)，加载可能缓慢，是否继续？')) {
@@ -2757,6 +2835,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var fileReader = new FileReader();
     fileReader.onload = function(loadEvent) {
       setEditorContent(loadEvent.target.result, true);
+      // 根据文件扩展名自动切换语言模式
       var fileExtension = selectedFile.name.split('.').pop().toLowerCase();
       var extensionLanguageMap = { js: 'js', ts: 'js', jsx: 'js', html: 'html', css: 'css', py: 'python', json: 'js', xml: 'html', md: 'html' };
       if (extensionLanguageMap[fileExtension]) switchLanguage(extensionLanguageMap[fileExtension]);
@@ -2824,6 +2903,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       getRequest.onerror = reject;
     });
     db.close();
+    // 验证已存储的目录句柄权限是否仍然有效
     if (handle && handle.queryPermission) {
       var permission = await handle.queryPermission({ mode: 'readwrite' });
       if (permission !== 'granted') return null;
@@ -2845,10 +2925,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     var mimeTypes = { html: 'text/html', css: 'text/css', js: 'text/javascript', py: 'text/x-python' };
     var mimeType = mimeTypes[EditorState.currentLanguage] || 'text/plain';
 
+    // 优先使用 File System Access API 保存到已选目录
     if (window.showDirectoryPicker) {
       try {
         var directoryHandle = await loadDirectoryHandle();
         if (!directoryHandle) {
+          // 没有已保存的目录句柄，请求用户选择目录
           directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
           await saveDirectoryHandle(directoryHandle);
         }
@@ -2865,7 +2947,8 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       } catch (err) {
         if (err.name === 'AbortError') return;
         else if (err.name === 'NotAllowedError') {
-          showToast('⚠️ 目录权限已失效，下次保存将重新选择', true);
+          showToast('⚠️ 目录权限已失效，已切换为浏览器下载', true);
+          // 清除失效的目录句柄，并继续执行后面的传统下载流程
           try {
             var db = await openDirectoryDB();
             var tx = db.transaction(DIR_HANDLE_STORE_NAME, 'readwrite');
@@ -2873,11 +2956,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
             await new Promise(function(r) { tx.oncomplete = r; });
             db.close();
           } catch (e) {}
-          return;
+          // 不 return，继续往下执行传统下载
         } else { console.error('保存失败:', err); }
       }
     }
 
+    // 降级：使用传统浏览器下载方式
     var lastFilename = loadFromLocalStorage('editor-last-download-filename', 'code');
     var userInputFilename = prompt('请输入文件名（无需后缀）:', lastFilename);
     if (userInputFilename === null) return;
@@ -2955,6 +3039,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     EditorState.startHeight = modalRect.height;
     EditorState.startLeft = modalRect.left;
     EditorState.startTop = modalRect.top;
+    // 调整大小时隐藏溢出内容，防止内部元素溢出影响视觉
     replaceModal.style.overflow = 'hidden';
     document.addEventListener('mousemove', onResize);
     document.addEventListener('mouseup', stopResize);
@@ -3000,6 +3085,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   replaceModalOverlay.addEventListener('click', function(event) {
     if (event.target === replaceModalOverlay) closeReplaceModal();
   });
+  // Escape 键关闭查找替换弹窗
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape' && replaceModalOverlay.classList.contains('open')) closeReplaceModal();
   });
@@ -3007,11 +3093,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   btnFindNext.addEventListener('click', findNext);
   btnReplaceOne.addEventListener('click', replaceOne);
   btnReplaceAll.addEventListener('click', replaceAll);
-
   // ==================== 语言切换 ====================
   function switchLanguage(language) {
     EditorState.currentLanguage = language;
     saveToLocalStorage(STORAGE_KEYS.LANGUAGE, language);
+    // 更新语言标签按钮的激活状态
     for (var i = 0; i < langLabels.length; i++) {
       var label = langLabels[i];
       var isActive = label.dataset.lang === language;
@@ -3019,9 +3105,11 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       label.setAttribute('aria-pressed', isActive);
     }
     langDisplay.textContent = languageDisplayNames[language] || language;
+    // 语言切换后重新高亮
     scheduleHighlightUpdate();
   }
 
+  // 为每个语言标签按钮绑定点击事件
   for (var i = 0; i < langLabels.length; i++) {
     langLabels[i].addEventListener('click', function() {
       switchLanguage(this.dataset.lang);
@@ -3044,6 +3132,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     EditorState.indentCharacter = savedIndent.character;
   }
 
+  // 点击缩进指示器循环切换：4空格 -> 2空格 -> 8空格 -> Tab -> 4空格
   indentIndicator.addEventListener('click', function() {
     if (EditorState.indentCharacter === ' ' && EditorState.indentSize === 4) {
       EditorState.indentSize = 2;
@@ -3067,11 +3156,13 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     document.documentElement.setAttribute('data-theme', theme);
     EditorState.theme = theme;
     saveToLocalStorage(STORAGE_KEYS.THEME, theme);
+    // 更新主题按钮图标
     if (theme === 'light') btnTheme.textContent = '🌙';
     else if (theme === 'ink') btnTheme.textContent = '🌊';
     else if (theme === 'cream') btnTheme.textContent = '🧁';
     else btnTheme.textContent = '☀️';
     btnTheme.setAttribute('aria-label', '切换主题（当前：' + theme + '）');
+    // 主题变量变更后同步到 Shadow DOM 高亮层
     syncShadowCSSVariables();
   }
 
@@ -3094,25 +3185,12 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     EditorState.currentFontSize = Math.max(10, Math.min(30, size));
     document.documentElement.style.setProperty('--editor-font-size', EditorState.currentFontSize + 'px');
     saveToLocalStorage(STORAGE_KEYS.FONT_SIZE, EditorState.currentFontSize);
+    // 字体变更后同步 Shadow DOM 中的变量
     syncShadowCSSVariables();
   }
 
-  document.addEventListener('keydown', function(event) {
-    if ((event.ctrlKey || event.metaKey) && (event.key === '=' || event.key === '+')) {
-      event.preventDefault();
-      setFontSize(EditorState.currentFontSize + 1);
-      showToast('字体大小: ' + EditorState.currentFontSize + 'px');
-    } else if ((event.ctrlKey || event.metaKey) && event.key === '-') {
-      event.preventDefault();
-      setFontSize(EditorState.currentFontSize - 1);
-      showToast('字体大小: ' + EditorState.currentFontSize + 'px');
-    } else if ((event.ctrlKey || event.metaKey) && event.key === '0') {
-      event.preventDefault();
-      setFontSize(14);
-      showToast('字体已重置为 14px');
-    }
-  });
-
+  // 字体缩放快捷键已合并到全局快捷键监听器中（见下方）
+  // 此处保留独立的 applyInitialFontSize 供初始化使用
   function applyInitialFontSize() {
     var savedSize = loadFromLocalStorage(STORAGE_KEYS.FONT_SIZE, 14);
     EditorState.currentFontSize = savedSize;
@@ -3161,6 +3239,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
   });
 
+  // Escape 键关闭帮助弹窗
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape' && helpModal.classList.contains('open')) {
       helpModal.classList.remove('open');
@@ -3168,29 +3247,64 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
   });
 
-  // ==================== 全局快捷键 ====================
-  document.addEventListener('keydown', function(event) {
+  // ==================== 统一全局快捷键监听器（合并字体缩放与所有功能快捷键，带焦点判断避免干扰输入框） ====================
+  function isEditableInputFocused() {
     var activeElement = document.activeElement;
-    var isInsideEditor = activeElement === codeEditor || (activeElement.closest && activeElement.closest('.container'));
-    if (!isInsideEditor && activeElement !== document.body) return;
+    if (!activeElement) return false;
+    // 排除主编辑器本身（codeEditor），因为它的快捷键已在自身 keydown 中处理
+    if (activeElement === codeEditor) return false;
+    // 检查是否为可编辑的输入元素
+    var tagName = activeElement.tagName;
+    if (tagName === 'INPUT' || tagName === 'TEXTAREA' || activeElement.isContentEditable) {
+      return true;
+    }
+    return false;
+  }
 
-    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'C') {
+  document.addEventListener('keydown', function(event) {
+    var isCtrlOrMeta = event.ctrlKey || event.metaKey;
+
+    // ========== 字体缩放快捷键（全局生效，即使焦点在输入框内也允许） ==========
+    if (isCtrlOrMeta && (event.key === '=' || event.key === '+')) {
       event.preventDefault();
-      copyCode();
+      setFontSize(EditorState.currentFontSize + 1);
+      showToast('字体大小: ' + EditorState.currentFontSize + 'px');
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'f') {
+    if (isCtrlOrMeta && event.key === '-') {
       event.preventDefault();
-      if (!replaceModalOverlay.classList.contains('open')) openReplaceModal();
+      setFontSize(EditorState.currentFontSize - 1);
+      showToast('字体大小: ' + EditorState.currentFontSize + 'px');
+      return;
+    }
+    if (isCtrlOrMeta && event.key === '0') {
+      event.preventDefault();
+      setFontSize(14);
+      showToast('字体已重置为 14px');
+      return;
+    }
+
+    // ========== 以下快捷键始终全局生效，即使焦点在输入框内也不拦截 ==========
+    // Ctrl+F 查找
+    if (isCtrlOrMeta && event.key === 'f') {
+      event.preventDefault();
+      if (!replaceModalOverlay.classList.contains('open')) {
+        openReplaceModal();
+      }
       replaceFind.focus();
-      replaceFind.select();
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'h') {
+    // Ctrl+H 替换
+    if (isCtrlOrMeta && event.key === 'h') {
       event.preventDefault();
-      if (!replaceModalOverlay.classList.contains('open')) openReplaceModal();
+      if (!replaceModalOverlay.classList.contains('open')) {
+        openReplaceModal();
+      }
       replaceWith.focus();
-      replaceWith.select();
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'g') {
+    // Ctrl+G 跳转到行
+    if (isCtrlOrMeta && event.key === 'g') {
       event.preventDefault();
       var lineInput = prompt('跳转到行号:');
       if (lineInput && !isNaN(lineInput)) {
@@ -3202,22 +3316,16 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         codeEditor.setSelectionRange(characterPosition, characterPosition);
         updateCursorPosition();
       }
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key === 't') {
-      event.preventDefault();
-      var currentTheme = document.documentElement.getAttribute('data-theme');
-      var themes = ['dark', 'light', 'ink', 'cream'];
-      var currentIndex = themes.indexOf(currentTheme);
-      var nextTheme = themes[(currentIndex + 1) % themes.length];
-      setTheme(nextTheme);
-      showToast('主题: ' + nextTheme);
-    }
-    if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+    // Ctrl+S 手动保存
+    if (isCtrlOrMeta && event.key === 's') {
       event.preventDefault();
       saveImmediately().catch(function() {});
+      return;
     }
-    // 撤销 Ctrl+Z
-    if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
+    // Ctrl+Z 撤销
+    if (isCtrlOrMeta && event.key === 'z' && !event.shiftKey) {
       event.preventDefault();
       if (historyManager.undo(codeEditor)) {
         scrollToCursor();
@@ -3225,9 +3333,10 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         fullUpdate();
         triggerAutoSave();
       }
+      return;
     }
-    // 重做 Ctrl+Y 或 Ctrl+Shift+Z
-    if ((event.ctrlKey || event.metaKey) && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
+    // Ctrl+Y 或 Ctrl+Shift+Z 重做
+    if (isCtrlOrMeta && (event.key === 'y' || (event.key === 'z' && event.shiftKey))) {
       event.preventDefault();
       if (historyManager.redo(codeEditor)) {
         scrollToCursor();
@@ -3235,6 +3344,28 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         fullUpdate();
         triggerAutoSave();
       }
+      return;
+    }
+    // Ctrl+T 切换主题
+    if (isCtrlOrMeta && event.key === 't') {
+      event.preventDefault();
+      var currentTheme = document.documentElement.getAttribute('data-theme');
+      var themes = ['dark', 'light', 'ink', 'cream'];
+      var currentIndex = themes.indexOf(currentTheme);
+      var nextTheme = themes[(currentIndex + 1) % themes.length];
+      setTheme(nextTheme);
+      showToast('主题: ' + nextTheme);
+      return;
+    }
+
+    // ========== 以下快捷键在可编辑输入框（非主编辑器）内时不触发，避免干扰用户输入 ==========
+    if (isEditableInputFocused()) return;
+
+    // Ctrl+Shift+C 复制代码
+    if (isCtrlOrMeta && event.shiftKey && event.key === 'C') {
+      event.preventDefault();
+      copyCode();
+      return;
     }
   });
 
@@ -3255,7 +3386,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         // 成功保存，清除脏标志
         saveToLocalStorage(STORAGE_KEYS.DIRTY_FLAG, '0');
       }).catch(() => {
-        // 超时或失败，保留脏标志
+        // 超时或失败，保留脏标志以便下次恢复
       });
     }
   }
@@ -3267,12 +3398,13 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
   });
   window.addEventListener('beforeunload', function(event) {
-    // 销毁 Worker
+    // 销毁 Worker，释放资源
     if (EditorState.highlightWorker) {
       EditorState.highlightWorker.terminate();
       EditorState.highlightWorker = null;
     }
     emergencySave();
+    // 有未保存更改时提示用户
     if (EditorState.codeModified) {
       event.preventDefault();
       event.returnValue = '您有未保存的更改，刷新页面可能会丢失。';
@@ -3312,9 +3444,9 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     updateUndoRedoState();
   });
 
+  // 编辑器内容变更时更新撤销/重做按钮状态
   codeEditor.addEventListener('input', updateUndoRedoState);
   codeEditor.addEventListener('keyup', updateUndoRedoState);
-
   // ==================== 文本域手动调节高度（查找/替换框） ====================
   function initializeResizableTextareas() {
     const resizeHandles = document.querySelectorAll('.resize-handle-textarea');
@@ -3323,6 +3455,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       replaceWith: 'replace-with-manual-height'
     };
 
+    // 恢复上次保存的文本域高度
     function restoreTextareaHeight(textareaId) {
       const textareaElement = document.getElementById(textareaId);
       if (!textareaElement) return;
@@ -3332,12 +3465,14 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       } else {
         textareaElement.style.height = '60px';
       }
+      // 禁用浏览器原生的 resize 手柄，使用自定义拖拽手柄
       textareaElement.style.resize = 'none';
     }
 
     restoreTextareaHeight('replaceFind');
     restoreTextareaHeight('replaceWith');
 
+    // 为每个拖拽手柄绑定事件
     resizeHandles.forEach(function(handle) {
       const targetId = handle.getAttribute('data-target');
       const targetTextarea = document.getElementById(targetId);
@@ -3351,8 +3486,10 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
         if (!isDraggingHeight) return;
         const deltaY = moveEvent.clientY - dragStartY;
         let newHeight = dragStartHeight + deltaY;
+        // 限制高度范围 60px ~ 400px
         newHeight = Math.min(400, Math.max(60, newHeight));
         targetTextarea.style.height = newHeight + 'px';
+        // 实时保存高度到 localStorage
         saveToLocalStorage(textareaHeightStorageKeys[targetId], newHeight);
       };
 
@@ -3379,6 +3516,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   const originalOpenReplaceModal = openReplaceModal;
   openReplaceModal = function() {
     originalOpenReplaceModal();
+    // 延迟应用高度，等待弹窗渲染完成
     setTimeout(function() {
       const findHeight = loadFromLocalStorage('replace-find-manual-height', null);
       const withHeight = loadFromLocalStorage('replace-with-manual-height', null);
@@ -3386,6 +3524,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       if (withHeight && typeof withHeight === 'number') replaceWith.style.height = withHeight + 'px';
     }, 20);
   };
+  // 重新绑定查找替换按钮事件，确保使用覆盖后的函数
   btnToggleReplace.removeEventListener('click', toggleReplaceModal);
   btnToggleReplace.addEventListener('click', toggleReplaceModal);
 
@@ -3398,48 +3537,58 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
 
   // ==================== 初始化流程 ====================
   async function initialize() {
+    // 初始化历史记录管理器
     historyManager = new HistoryManager(200);
     historyManager.pushState(codeEditor);
 
+    // 打开 IndexedDB 自动保存数据库
     try {
       await openAutoSaveDatabase();
     } catch (dbError) {
       console.warn('IndexedDB 不可用，将仅使用 localStorage 缓存');
     }
 
+    // 加载用户偏好设置
     loadIndentSetting();
     updateIndentIndicator();
     loadTheme();
     applyInitialFontSize();
     applyInitialWrap();
 
-    // 加载折叠状态
+    // 加载代码折叠状态
     EditorState.foldedRanges = loadFromLocalStorage(STORAGE_KEYS.FOLDED_RANGES, []);
     setupLineNumberClickHandler();
 
+    // 加载高亮开关状态
     EditorState.highlightEnabled = loadFromLocalStorage(STORAGE_KEYS.HIGHLIGHT_ENABLED, true);
     EditorState.userForcedHighlight = false;
     updateHighlightStatusIndicator(EditorState.highlightEnabled);
 
+    // 尝试恢复上次保存的代码
     var wasRestored = await loadSavedCode();
     if (!wasRestored) {
+      // 无保存内容时加载默认示例代码
       setEditorContent(defaultCode, false);
     }
     setOriginalCode(codeEditor.value);
     historyManager.pushState(codeEditor);
 
+    // 创建 Web Worker 用于异步搜索匹配
     try {
       createHighlightWorker();
     } catch (workerError) {
       console.warn('Web Worker 创建失败，将使用主线程搜索', workerError);
     }
 
+    // 初始化 Shadow DOM 高亮层
     setupShadowHighlightLayer();
 
+    // 恢复查找替换输入框的内容和选项
     restoreReplaceInputs();
     fullUpdate();
     toggleClearButton();
 
+    // 恢复上次使用的语言模式
     EditorState.currentLanguage = loadFromLocalStorage(STORAGE_KEYS.LANGUAGE, 'js');
     for (var i = 0; i < langLabels.length; i++) {
       var label = langLabels[i];
@@ -3448,17 +3597,21 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     }
     langDisplay.textContent = languageDisplayNames[EditorState.currentLanguage] || EditorState.currentLanguage;
 
+    // 执行一次初始保存，确保数据库中有内容
     try {
       await saveCodeToIndexedDB(codeEditor.value);
     } catch (e) {}
 
+    // 初始化文本域可调节高度功能
     initializeResizableTextareas();
 
+    // 聚焦编辑器，更新按钮状态
     codeEditor.focus();
     updateUndoRedoState();
-    console.log('%c🚀 专业版编辑器 v3.2.0 已就绪（交互增强与性能优化版）', 'color:#a3be8c;font-weight:bold;');
+    console.log('%c🚀 专业版编辑器 v7.3.3 已就绪（健壮性与交互一致性强化版）', 'color:#a3be8c;font-weight:bold;');
   }
 
+  // 启动编辑器
   initialize();
 })();
 </script>
