@@ -1175,14 +1175,25 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   function findFoldRange(lines, startLineIndex) {
     if (startLineIndex >= lines.length - 1) return null;
     const baseIndent = getLineIndentLevel(lines[startLineIndex]);
-    if (baseIndent === 0 && startLineIndex === 0) return null; // 顶层不折叠
-    let endLineIndex = startLineIndex + 1;
+    // 不允许折叠缩进为0的顶层行（避免折叠整个文件）
+    if (baseIndent === 0) return null;
+    // 找到第一个缩进大于基准行的非空行，如果没有则无法折叠
+    let foldStart = startLineIndex + 1;
+    while (foldStart < lines.length) {
+      const indent = getLineIndentLevel(lines[foldStart]);
+      if (indent > baseIndent && lines[foldStart].trim() !== '') break;
+      foldStart++;
+    }
+    if (foldStart >= lines.length) return null;
+    // 从foldStart开始，收集所有缩进大于基准行（或者为空行）的行，直到遇到缩进 <= 基准行的非空行
+    let endLineIndex = foldStart;
     while (endLineIndex < lines.length) {
       const currentIndent = getLineIndentLevel(lines[endLineIndex]);
       if (currentIndent <= baseIndent && lines[endLineIndex].trim() !== '') break;
       endLineIndex++;
     }
-    if (endLineIndex > startLineIndex + 1) {
+    // 折叠起始行固定为传入的 startLineIndex，结束行为 endLineIndex - 1
+    if (endLineIndex > foldStart) {
       return { startLine: startLineIndex, endLine: endLineIndex - 1 };
     }
     return null;
@@ -1445,11 +1456,25 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   function createHighlightWorker() {
     const workerScript = `
       function escapeHtml(text) { return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-      function escapeRegExp(string) { return string.replace(/[-\\/\\\\^$*+?.()|[\\]{}]/g, '\\\\$&'); }
+      function escapeRegExp(string) { return string.replace(/[-\\\\/^$*+?.()|[\\]{}]/g, '\\\\$&'); }
       function isRegexSafeForWorker(pattern) {
-        if (pattern.length > 100) return false;
-        var dangerous = /([+*{]\d*,?\d*})[\\s\\S]*\\1|\\([^()]*\\?[^()]*\\+[^()]*\\)[+*]|\\(\\.\\*\\)[+*]/;
-        return !dangerous.test(pattern);
+        if (!pattern || pattern.length > 200) return false;
+        var dangerousPatterns = [
+          /\([^)]*\|[^)]*\)[+*]{2,}/,
+          /\((?:[^()]|\([^()]*\))*\)[+*]{2,}/,
+          /\(\.\*\)[+*]/,
+          /\(\.\+\)[+*]/,
+          /\w+\+\+/,
+          /\w+\*\*/,
+          /\([^)]*\)\{[^}]*,[^}]*\}[+*]/,
+          /(\[.*?\])\1[+*]/,
+          /([+*{]\d*,?\d*})[\s\S]*\1/
+        ];
+        for (var i = 0; i < dangerousPatterns.length; i++) {
+          if (dangerousPatterns[i].test(pattern)) return false;
+        }
+        try { new RegExp(pattern); } catch(e) { return false; }
+        return true;
       }
       function buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex) {
         if (!searchTerm) return null;
@@ -1470,7 +1495,9 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       self.onmessage = function(event) {
         var message = event.data;
         if (message.type === 'searchMatches') {
-          var { code, searchTerm, caseSensitive, wholeWord, useRegex, timeout } = message;
+          var code = message.code, searchTerm = message.searchTerm,
+              caseSensitive = message.caseSensitive, wholeWord = message.wholeWord,
+              useRegex = message.useRegex, timeout = message.timeout;
           var regex = buildSearchRegex(searchTerm, caseSensitive, wholeWord, useRegex);
           if (!regex) {
             self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'regex_invalid' });
@@ -1490,17 +1517,46 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
           self.postMessage({ type: 'searchMatchesResult', matches: matches, safe: true });
         }
       };
+      // 捕获Worker内部未处理的异常
+      self.onerror = function(e) {
+        self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'worker_error' });
+      };
     `;
     const blob = new Blob([workerScript], { type: 'application/javascript' });
-    EditorState.highlightWorker = new Worker(URL.createObjectURL(blob));
+    const worker = new Worker(URL.createObjectURL(blob));
+    // 主线程监听worker脚本级错误（例如解析失败）
+    worker.onerror = function(event) {
+      console.warn('Highlight worker error, falling back to main thread', event);
+      EditorState.highlightWorker = null;   // 标记为不可用，后续自动降级
+    };
+    EditorState.highlightWorker = worker;
   }
 
   // ==================== 正则安全校验（主线程增强版） ====================
   function isRegexSafe(pattern) {
-    if (!pattern || pattern.length > 100) return false;
-    // 禁止嵌套量词、无限回溯结构
-    const dangerous = /([+*{]\d*,?\d*})[\s\S]*\1|\([^()]*\?[^()]*\+[^()]*\)[+*]|\(\.\*\)[+*]/;
-    return !dangerous.test(pattern);
+    if (!pattern || pattern.length > 200) return false;
+    // 检测常见灾难性回溯模式
+    const dangerousPatterns = [
+      /\([^)]*\|[^)]*\)[+*]{2,}/,            // (a|b)++ 或 (a|b)**
+      /\((?:[^()]|\([^()]*\))*\)[+*]{2,}/,  // 嵌套分组重复
+      /\(\.\*\)[+*]/,                        // (.*)+ 或 (.*)*
+      /\(\.\+\)[+*]/,                        // (.+)+ 或 (.+)*
+      /\w+\+\+/,                             // a++
+      /\w+\*\*/,                             // a**
+      /\([^)]*\)\{[^}]*,[^}]*\}[+*]/,       // (a){n,m}+ 等
+      /(\[.*?\])\1[+*]/,                     // ([a-z])\1+
+      /([+*{]\d*,?\d*})[\s\S]*\1/          // 量词重复自身引用
+    ];
+    for (let i = 0; i < dangerousPatterns.length; i++) {
+      if (dangerousPatterns[i].test(pattern)) return false;
+    }
+    // 尝试编译正则，编译失败也视为不安全
+    try {
+      new RegExp(pattern);
+    } catch (e) {
+      return false;
+    }
+    return true;
   }
 
   // ==================== 构建搜索正则表达式（主线程仅用于轻量预览，真正搜索由 Worker 完成） ====================
@@ -2144,6 +2200,18 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   }
 
   function closeReplaceModal() {
+    // 强制结束拖拽和调整大小，移除残留的全局监听器
+    if (EditorState.isDragging) {
+      EditorState.isDragging = false;
+      document.removeEventListener('mousemove', onDrag);
+      document.removeEventListener('mouseup', stopDrag);
+    }
+    if (EditorState.isResizing) {
+      EditorState.isResizing = false;
+      document.removeEventListener('mousemove', onResize);
+      document.removeEventListener('mouseup', stopResize);
+      replaceModal.style.overflow = '';
+    }
     if (replaceModalOverlay.classList.contains('open')) {
       var modalRect = replaceModal.getBoundingClientRect();
       saveToLocalStorage(STORAGE_KEYS.REPLACE_MODAL_POSITION, {
@@ -2340,6 +2408,48 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
     replaceWholeWord.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_WHOLE_WORD, false);
     replaceUseRegex.checked = loadFromLocalStorage(STORAGE_KEYS.REPLACE_USE_REGEX, false);
   }
+
+  // 查找替换输入框智能全选：单击且无选区时自动全选，保留手动拖选选区
+  function setupSmartSelect(textarea) {
+    let isDragging = false;
+    let hadSelection = false;
+
+    textarea.addEventListener('mousedown', function(e) {
+      // 记录鼠标按下时输入框内是否已有选区（不等即表示有选区）
+      hadSelection = this.selectionStart !== this.selectionEnd;
+      isDragging = false;
+      var startX = e.clientX, startY = e.clientY;
+
+      function onMouseMove(moveEvent) {
+        // 移动超过2px才算拖拽
+        if (Math.abs(moveEvent.clientX - startX) > 2 || Math.abs(moveEvent.clientY - startY) > 2) {
+          isDragging = true;
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        }
+      }
+
+      function onMouseUp() {
+        // 仅当之前无选区且用户未拖拽（纯单击）时，全选内容
+        if (!hadSelection && !isDragging) {
+          this.select();
+        }
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+
+      // 绑定全局事件，用 this 正确引用 textarea
+      const self = this;
+      const boundMouseMove = onMouseMove.bind(self);
+      const boundMouseUp = onMouseUp.bind(self);
+      document.addEventListener('mousemove', boundMouseMove);
+      document.addEventListener('mouseup', boundMouseUp);
+    });
+  }
+
+  // 为查找框和替换框启用智能全选
+  setupSmartSelect(replaceFind);
+  setupSmartSelect(replaceWith);
 
   // 查找替换输入实时更新
   replaceFind.addEventListener('input', function() {
@@ -2600,7 +2710,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
       updateMatchCount();
     }
   });
-  codeEditor.addEventListener('scroll', syncScroll);
+  codeEditor.addEventListener('scroll', syncScroll, { passive: true });
   codeEditor.addEventListener('paste', function(event) {
     event.preventDefault();
     var clipboardData = event.clipboardData || window.clipboardData;
@@ -2988,7 +3098,7 @@ console.log('Fibonacci(20) =', fibonacci(20));`;
   }
 
   document.addEventListener('keydown', function(event) {
-    if ((event.ctrlKey || event.metaKey) && event.key === '=') {
+    if ((event.ctrlKey || event.metaKey) && (event.key === '=' || event.key === '+')) {
       event.preventDefault();
       setFontSize(EditorState.currentFontSize + 1);
       showToast('字体大小: ' + EditorState.currentFontSize + 'px');
