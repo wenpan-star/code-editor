@@ -1,0 +1,35 @@
+# filename: 完整目录树.txt
+# ============================================================================
+# 完整目录树状图.txt
+# ============================================================================
+
+code-editor/
+├── index.html
+├── README.md
+├── STRUCTURE.md
+├── 完整目录树.txt
+├── css/
+│   └── styles.css
+└── js/
+    ├── config.js
+    ├── directory-io.js
+    ├── dom.js
+    ├── editor-api.js
+    ├── editor.js
+    ├── encoding.js
+    ├── file-io.js
+    ├── folding.js
+    ├── gbk-codec.js
+    ├── highlight.js
+    ├── history.js
+    ├── java-runner.js
+    ├── line-numbers.js
+    ├── main.js
+    ├── output.js
+    ├── search.js
+    ├── settings-io.js
+    ├── state.js
+    ├── storage.js
+    ├── toast.js
+    ├── ui.js
+    └── util.js
