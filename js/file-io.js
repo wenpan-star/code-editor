@@ -4,43 +4,52 @@
  * file-io.js — 文件导入 / 下载 / 拖拽 / 后缀约束
  * ============================================================================
  *
- * 【本次重构】
- *   后缀系统从"预设 + 全局历史"重构为"权威合法集合 + 每语言记忆"。
+ * 【本次重构（后缀系统闭环补丁）】
  *
- *   1. 根因诊断：
- *      · 原实现的下拉数据源 = LANGUAGE_PRESET_EXTENSIONS + FILE_EXTENSION_HISTORY；
- *      · FILE_EXTENSION_HISTORY 是全局数组，无语言隔离；
- *      · TXT 输入 'py' 后，'py' 进入全局历史，导致 HTML / JS / CSS / Java
- *        的下拉都会出现 'py'；
- *      · 反向亦然：Python 下拉可能出现 'bat' / 'html' / 'md' 等。
- *      结果：违背"相应语言只能是相应的后缀"的语义。
+ *   修复上一轮审核发现的两处 P1 与两处 P2 问题：
  *
- *   2. 新模型：
- *      · LANGUAGE_VALID_EXTENSIONS（来自 config.js）为唯一权威来源；
- *      · 彻底废弃 FILE_EXTENSION_HISTORY 及其全部读写函数；
- *      · 记忆结构 EditorState.languageExtensionMap 保持不变，
- *        但所有读取路径经 resolveExtensionForLanguage 统一校验，
- *        保证非法值（旧版遗留 / 跨语言）一律回退到默认值；
- *      · 新增跨语言占用校验 isExtensionUsedByOtherLanguage，
- *        供 TXT 自由输入模式使用；
- *      · 预计算 ALL_RESERVED_EXTENSIONS Set，将占用校验从 O(n) 降到 O(1)。
+ *   1. P1 Bug 1 — TXT 自由模式下无法清空后缀输入框
+ *      根因：isExtensionAllowedForLanguage 把空字符串一律视为非法，
+ *            导致用户清空后触发 change 时被"恢复上次有效值"。
+ *      修复：将语义拆分为"受约束模式 / 自由模式"两种判断：
+ *            · 受约束模式（集合非空）→ 空值非法（不允许清空）；
+ *            · 自由模式（集合为空，仅 TXT）→ 空值合法（无自定义后缀）。
  *
- *   3. UI 模式自动切换：
- *      · 集合非空 → 受约束模式（readOnly + 下拉选择）；
- *      · 集合为空 → 自由模式（可编辑 + 失焦校验）。
+ *   2. P1 Bug 2 — 下载路径绕过跨语言校验
+ *      根因：handleDownloadClick 直接读输入框 DOM 值（getCustomFileExtension），
+ *            在用户输入后未失焦时点下载可绕过 change 事件里的合法性校验。
+ *      修复：改为读 EditorState.languageExtensionMap（记忆值），
+ *            再做一次 isExtensionAllowedForLanguage 二次校验，
+ *            非法则回退默认后缀并提示。
  *
- *   4. 一次性数据清理：
- *      · 启动时删除历史遗留的 FILE_EXTENSION_HISTORY 键；
- *      · 同时全量校正 languageExtensionMap 中可能存在的非法值。
+ *   3. P2 问题 3 — TXT 输入后未失焦不持久化
+ *      根因：原实现在 input 事件只净化显示、不写记忆，
+ *            只在 change / Enter 时写入；
+ *            用户输入后立即关闭标签页 / 直接点下载时输入丢失。
+ *      修复：
+ *            · input 事件立即乐观写入 EditorState.languageExtensionMap；
+ *            · focus 事件记录快照 fileExtensionFocusSnapshot；
+ *            · change 事件校验，非法时回滚到快照；
+ *            · 下次启动时 initializeFileExtensionInput 全量校正会清理
+ *              极端场景（乐观写入非法值后立即崩溃）残留的非法值。
  *
- *   5. 保留全部原有导出接口与行为（除已废弃的历史函数）：
- *      bindImportEvents / bindDragAndDropEvents / bindDownloadEvents /
- *      sanitizeFileExtension / getCustomFileExtension /
- *      updateFileExtensionForLanguage / showFileExtensionDropdown /
- *      hideFileExtensionDropdown / updateFileExtensionPlaceholder /
- *      initializeFileExtensionInput。
+ *   4. P2 问题 4 — 切换语言时输入框焦点未处理
+ *      根因：updateFileExtensionForLanguage 更新输入框值与 readOnly，
+ *            但若焦点仍在输入框，readOnly 变化后键盘输入无效，
+ *            视觉上却像可编辑，用户困惑。
+ *      修复：更新前若输入框有焦点则主动 blur。
  *
- * 【删除的导出接口（已无调用方）】
+ *   本次修复不改变任何导出接口签名，不改变 DOM 结构，不改变存储键，
+ *   不改变 UI 文案语义，仅补强已有逻辑。
+ *
+ * 【保留的既有设计（不修改）】
+ *   · 后缀合法集合由 config.js 的 LANGUAGE_VALID_EXTENSIONS 唯一声明；
+ *   · 记忆由 EditorState.languageExtensionMap 唯一承担；
+ *   · 导入文件时不更新记忆（导入是"高亮选择"不是"后缀选择"）；
+ *   · 启动时一次性清理 FILE_EXTENSION_HISTORY 与 v8.4.1 单一后缀键；
+ *   · readOnly 由"集合是否为空"决定。
+ *
+ * 【删除的导出接口（上一轮已废弃，本轮保持）】
  *   · loadFileExtensionHistory
  *   · saveFileExtensionHistory
  *   · addToFileExtensionHistory
@@ -89,6 +98,15 @@ let isSanitizingFileExtension = false;
 // 幂等保护标志：防止 initializeFileExtensionInput 被重复调用。
 let isFileExtensionInputInitialized = false;
 
+// 输入框聚焦时的"记忆快照"。
+// 用途：change 事件校验失败时回滚到该快照（而不是回滚到可能已被
+//        input 事件乐观写入的当前 map 值）。
+// 生命周期：
+//   · focus → 记录当时 map 中的合法值；
+//   · change 校验失败 → 用快照覆盖 map 与输入框显示；
+//   · 无 focus 而直接 change（理论不会发生）→ 保持上次快照。
+let fileExtensionFocusSnapshot = '';
+
 /**
  * 所有语言合法后缀的并集（预计算 Set）。
  *
@@ -120,7 +138,7 @@ const ALL_RESERVED_EXTENSIONS = (function buildReservedExtensionsSet() {
  *   2. 若当前编码为 'auto'，按扩展名推荐编码（.bat/.cmd → 'ansi'）；
  *   3. 若仍未定编码，按 UTF-8 有效性检测。
  *
- * 后缀记忆行为（本次重构后）：
+ * 后缀记忆行为：
  *   · 导入文件**不更新** languageExtensionMap；
  *   · 理由：导入的语言选择是"高亮选择"，不是"后缀选择"；
  *   · 用户导入 .spec 时不应该让 Python 后缀记忆变为 'spec'。
@@ -215,8 +233,9 @@ function loadFileIntoEditor(file) {
 
         const fileExtension = file.name.split('.').pop().toLowerCase();
         if (EXTENSION_LANGUAGE_MAP[fileExtension]) {
-            // switchLanguage 内部会通过回调自动调用 updateFileExtensionForLanguage
-            // 后者使用 resolveExtensionForLanguage，保证后缀框只显示合法值。
+            // switchLanguage 内部通过回调触发 updateFileExtensionForLanguage，
+            // 后者使用 resolveExtensionForLanguage 保证后缀框只显示合法值；
+            // 本次导入不写入 languageExtensionMap，避免污染后缀记忆。
             switchLanguage(EXTENSION_LANGUAGE_MAP[fileExtension]);
         }
         showToast('📂 已加载 ' + file.name + ' (' + ENCODING_DISPLAY_NAMES[finalEncoding] + ')');
@@ -281,7 +300,10 @@ export function sanitizeFileExtension(extensionText) {
 /**
  * 从输入框读取当前后缀（已净化）。
  *
- * 不校验合法性：合法性由 updateFileExtensionForLanguage 与输入事件保证。
+ * 注意：本函数只做字符净化，**不校验合法性**。
+ *       调用方若需要合法值，请使用 EditorState.languageExtensionMap
+ *       或再调用 isExtensionAllowedForLanguage 二次校验。
+ *       保留此函数供未来可能的外部调用者使用，内部代码已不再依赖它。
  */
 export function getCustomFileExtension() {
     if (!DOM.fileExtensionInput) return '';
@@ -291,28 +313,9 @@ export function getCustomFileExtension() {
 // ==================== 后缀：合法性与占用校验 ====================
 
 /**
- * 判断后缀是否属于该语言的合法集合。
- *
- * 语义：
- *   · 空后缀 → false（任何语言都不接受空作为"合法后缀"）；
- *   · 集合非空 → 严格集合成员判断；
- *   · 集合为空（TXT）→ 返回 true，
- *     交由 isExtensionAllowedForLanguage 做进一步的跨语言占用校验。
- */
-function isValidExtensionForLanguage(language, extension) {
-    if (!extension) return false;
-    const validList = LANGUAGE_VALID_EXTENSIONS[language];
-    if (!Array.isArray(validList)) return false;
-    if (validList.length === 0) return true;
-    return validList.indexOf(extension) !== -1;
-}
-
-/**
  * 判断后缀是否被其他语言占用。
  *
- * 用于 TXT 自由输入场景：TXT 不能输入 py / html / js 等已被其他语言
- * 声明的后缀，否则会导致跨语言语义混淆。
- *
+ * 用于自由输入模式（TXT）下的跨语言占用校验。
  * 使用预计算 Set 实现 O(1) 判断。
  */
 function isExtensionUsedByOtherLanguage(language, extension) {
@@ -329,16 +332,32 @@ function isExtensionUsedByOtherLanguage(language, extension) {
 /**
  * 综合判定：后缀是否可以在该语言下使用。
  *
- * 分两种模式：
- *   · 受约束模式（集合非空）→ 只需在集合内；
- *   · 自由模式（集合为空）  → 只要不被其他语言占用即可。
+ * 分两种模式（本次重构的关键语义修正）：
+ *
+ *   1. 受约束模式（LANGUAGE_VALID_EXTENSIONS[language] 非空）：
+ *      · 空值视为非法（不允许清空，语义上必须有后缀）；
+ *      · 非空值必须严格属于合法集合。
+ *
+ *   2. 自由模式（集合为空，当前仅 TXT）：
+ *      · 空值视为合法（表示"无自定义后缀"）；
+ *      · 非空值必须不被其他语言占用。
+ *
+ * 修正说明：
+ *   上一轮实现将所有空值一律视为非法，导致 TXT 模式下用户清空
+ *   输入框后触发 change 时被回滚到上次值，永远无法回到空状态。
+ *   本次修正区分两种模式：TXT 允许空，受约束语言不允许空。
  */
 function isExtensionAllowedForLanguage(language, extension) {
-    if (!extension) return false;
     const validList = LANGUAGE_VALID_EXTENSIONS[language];
+
+    // ---- 受约束模式 ----
     if (Array.isArray(validList) && validList.length > 0) {
+        if (!extension) return false;
         return validList.indexOf(extension) !== -1;
     }
+
+    // ---- 自由模式（集合为空） ----
+    if (!extension) return true;
     return !isExtensionUsedByOtherLanguage(language, extension);
 }
 
@@ -353,7 +372,7 @@ function isExtensionAllowedForLanguage(language, extension) {
  *
  * 该函数保证：
  *   · 无论存储在 map 中的历史值如何（旧版自定义 / 跨语言污染），
- *     返回值一定是当前语言下的合法后缀；
+ *     返回值一定是当前语言下的合法后缀（或 TXT 下的空值）；
  *   · 未来新增语言无需改动此逻辑。
  */
 function resolveExtensionForLanguage(language) {
@@ -373,34 +392,46 @@ function resolveExtensionForLanguage(language) {
 /**
  * 语言切换时更新后缀框。
  *
- * 关键变化（本次重构）：
- *   · 使用 resolveExtensionForLanguage 校验记忆值，
- *     非法值自动回退到默认；
- *   · readOnly 由"集合是否为空"决定，不再依赖废弃常量；
- *   · 若该语言为新语言（无记忆），用 AUTO_EXTENSION_BY_LANGUAGE 初始化。
+ * 关键步骤：
+ *   1. 若输入框当前有焦点，先主动 blur；
+ *      （避免输入框 readOnly 状态变化后键盘输入无效而视觉上仍似可编辑）
+ *   2. 使用 resolveExtensionForLanguage 恢复有效值（含非法值回退）；
+ *   3. 根据"集合是否为空"设置 readOnly；
+ *   4. 更新 placeholder / title；
+ *   5. 隐藏下拉（切换语言后下拉不应保持打开）；
+ *   6. 持久化 map。
  */
 export function updateFileExtensionForLanguage(language) {
     if (!DOM.fileExtensionInput) return;
+
+    // ---- 1. 主动失焦（P2 问题 4 修复） ----
+    if (document.activeElement === DOM.fileExtensionInput) {
+        DOM.fileExtensionInput.blur();
+    }
 
     if (!EditorState.languageExtensionMap
         || typeof EditorState.languageExtensionMap !== 'object') {
         EditorState.languageExtensionMap = {};
     }
 
-    // 通过统一入口恢复有效值（内部会处理"未定义 / 非法"两种情况）
+    // ---- 2. 恢复有效值 ----
     const resolvedValue = resolveExtensionForLanguage(language);
     EditorState.languageExtensionMap[language] = resolvedValue;
 
     DOM.fileExtensionInput.value = resolvedValue;
 
-    // 根据集合是否为空设置 readOnly
+    // ---- 3. 设置 readOnly ----
     const validList = LANGUAGE_VALID_EXTENSIONS[language];
     const hasFixedCollection = Array.isArray(validList) && validList.length > 0;
     DOM.fileExtensionInput.readOnly = hasFixedCollection;
 
+    // ---- 4. 更新提示 ----
     updateFileExtensionPlaceholder();
+
+    // ---- 5. 隐藏下拉 ----
     hideFileExtensionDropdown();
 
+    // ---- 6. 持久化 ----
     saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
 }
 
@@ -470,7 +501,6 @@ function renderFileExtensionDropdown() {
 /**
  * 下拉项被选中后的处理。
  *
- * 简单逻辑：写入记忆 + 更新输入框 + 隐藏下拉。
  * 由于数据源就是合法集合，选中项必然合法，无需二次校验。
  */
 function handleExtensionItemSelect(selectedValue) {
@@ -561,6 +591,13 @@ export function updateFileExtensionPlaceholder() {
  *   6. 绑定 input / change / focus / click / blur / keydown 事件；
  *   7. 绑定全局 mousedown / keydown 事件（下拉关闭）；
  *   8. 清理已废弃的 FILE_EXTENSION_HISTORY 键。
+ *
+ * 事件语义（本次重构后）：
+ *   · input  → 净化显示 + 乐观写入 map；
+ *   · focus  → 记录快照（供 change 校验失败时回滚）；
+ *   · change → 校验：合法保持、非法回滚到快照 + Toast 提示；
+ *   · Enter  → 同 change；
+ *   · Escape → 关闭下拉并 blur。
  */
 export function initializeFileExtensionInput() {
     if (!DOM.fileExtensionInput) return;
@@ -634,10 +671,10 @@ export function initializeFileExtensionInput() {
     // ---- 5. 应用到当前语言 ----
     updateFileExtensionForLanguage(EditorState.currentLanguage);
 
-    // ---- 6. input 事件 ----
-    // 说明：受约束语言 input 事件不触发（readOnly）；
-    //       TXT 自由输入模式下，input 仅净化显示，不写入 map；
-    //       真正的合法性校验在 change / Enter 时进行。
+    // ---- 6. input 事件：净化显示 + 乐观写入 ----
+    // 修复 P2 问题 3：TXT 输入后未失焦不持久化。
+    // 现在 input 事件立即写入 map，即使未失焦也持久化；
+    // 若写入的值非法，change 事件会在失焦时回滚到 focus 时的快照。
     DOM.fileExtensionInput.addEventListener('input', function() {
         if (isSanitizingFileExtension) return;
 
@@ -662,11 +699,27 @@ export function initializeFileExtensionInput() {
                 isSanitizingFileExtension = false;
             }
         }
-        // 注意：不在此处写入 languageExtensionMap，避免乐观写入非法值。
-        // 合法性判断与写入统一在 change / Enter 时执行。
+
+        // 乐观写入：即便用户未失焦，也持久化当前输入。
+        // 非法值将由 change 事件回滚；极端场景（乐观写入后立即崩溃）
+        // 残留的非法值由下次启动的全量校正清理。
+        if (!EditorState.languageExtensionMap
+            || typeof EditorState.languageExtensionMap !== 'object') {
+            EditorState.languageExtensionMap = {};
+        }
+        EditorState.languageExtensionMap[EditorState.currentLanguage] = sanitizedValue;
+        saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
     });
 
-    // ---- 7. change 事件：合法性校验入口 ----
+    // ---- 7. focus 事件：记录快照 ----
+    // 用于 change 校验失败时回滚到"聚焦时的合法值"。
+    DOM.fileExtensionInput.addEventListener('focus', function() {
+        fileExtensionFocusSnapshot =
+            EditorState.languageExtensionMap[EditorState.currentLanguage] || '';
+        showFileExtensionDropdown();
+    });
+
+    // ---- 8. change 事件：校验入口 ----
     DOM.fileExtensionInput.addEventListener('change', function() {
         const sanitizedValue = sanitizeFileExtension(this.value);
         if (this.value !== sanitizedValue) {
@@ -675,20 +728,17 @@ export function initializeFileExtensionInput() {
         commitFileExtensionValue(sanitizedValue);
     });
 
-    // ---- 8. focus / click ----
-    DOM.fileExtensionInput.addEventListener('focus', function() {
-        showFileExtensionDropdown();
-    });
+    // ---- 9. click 事件：显示下拉 ----
     DOM.fileExtensionInput.addEventListener('click', function() {
         showFileExtensionDropdown();
     });
 
-    // ---- 9. blur ----
+    // ---- 10. blur 事件：隐藏下拉 ----
     DOM.fileExtensionInput.addEventListener('blur', function() {
         hideFileExtensionDropdown();
     });
 
-    // ---- 10. keydown ----
+    // ---- 11. keydown 事件：Escape / Enter ----
     DOM.fileExtensionInput.addEventListener('keydown', function(event) {
         if (event.key === 'Escape') {
             event.preventDefault();
@@ -708,7 +758,7 @@ export function initializeFileExtensionInput() {
         }
     });
 
-    // ---- 11. 全局 mousedown（点击外部关闭下拉） ----
+    // ---- 12. 全局 mousedown（点击外部关闭下拉） ----
     document.addEventListener('mousedown', function(event) {
         if (!DOM.fileExtensionInput) return;
         const wrapperElement = document.getElementById('fileExtensionWrapper');
@@ -718,7 +768,7 @@ export function initializeFileExtensionInput() {
         }
     });
 
-    // ---- 12. 全局 keydown（Escape 关闭下拉） ----
+    // ---- 13. 全局 keydown（Escape 关闭下拉） ----
     document.addEventListener('keydown', function(event) {
         if (event.key === 'Escape') {
             if (DOM.fileExtensionDropdown && DOM.fileExtensionDropdown.style.display !== 'none') {
@@ -732,18 +782,19 @@ export function initializeFileExtensionInput() {
  * 提交后缀值的统一入口（change / Enter 共用）。
  *
  * 逻辑：
- *   · 若 value 合法 → 写入 languageExtensionMap，保持输入框显示；
- *   · 若 value 非法 → 恢复输入框显示为记忆中的合法值，并 Toast 提示。
+ *   · 若 value 合法 → 保持（map 已被 input 事件乐观写入同值）；
+ *   · 若 value 非法 → 回滚到 fileExtensionFocusSnapshot + Toast 提示。
  *
- * 为什么非法时恢复而不是清空？
- *   · 用户输入 py 被拒绝时，我们希望恢复到"上次有效值"而非空；
- *   · 记忆中的合法值就是"上次有效值"，直接复用即可。
+ * 为什么回滚而不是清空？
+ *   · 用户输入非法值时，最有用的行为是"恢复到之前的合法选择"；
+ *   · 清空会导致 TXT 丢失之前的自定义后缀，受约束语言会丢失当前选择；
+ *   · 回滚到聚焦时的快照，用户能清晰看到"我原来的值还在"。
  */
 function commitFileExtensionValue(value) {
     const currentLanguage = EditorState.currentLanguage;
 
     if (isExtensionAllowedForLanguage(currentLanguage, value)) {
-        // 合法：写入记忆
+        // 合法：input 事件已写入 map，这里只需保证持久化与提示同步。
         if (!EditorState.languageExtensionMap
             || typeof EditorState.languageExtensionMap !== 'object') {
             EditorState.languageExtensionMap = {};
@@ -763,9 +814,20 @@ function commitFileExtensionValue(value) {
         }
     }
 
-    const lastValidValue = EditorState.languageExtensionMap[currentLanguage] || '';
+    // 回滚到聚焦时的快照（该值一定合法，因为它来自记忆恢复后的合法值）
+    const restoredValue = isExtensionAllowedForLanguage(currentLanguage, fileExtensionFocusSnapshot)
+        ? fileExtensionFocusSnapshot
+        : (AUTO_EXTENSION_BY_LANGUAGE[currentLanguage] || '');
+
+    if (!EditorState.languageExtensionMap
+        || typeof EditorState.languageExtensionMap !== 'object') {
+        EditorState.languageExtensionMap = {};
+    }
+    EditorState.languageExtensionMap[currentLanguage] = restoredValue;
+    saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
+
     if (DOM.fileExtensionInput) {
-        DOM.fileExtensionInput.value = lastValidValue;
+        DOM.fileExtensionInput.value = restoredValue;
     }
     updateFileExtensionPlaceholder();
 }
@@ -789,6 +851,18 @@ function resolveEncodingDisplayName(encoding) {
 /**
  * 下载 / 保存文件。
  *
+ * 后缀决策（本次重构后的关键路径）：
+ *   1. 从 EditorState.languageExtensionMap 读取记忆值（已通过 resolve 校验）；
+ *   2. **二次校验**：若记忆值非法（例如用户在 TXT 输入 py 后未失焦
+ *      直接点击下载，input 事件已乐观写入 map），回退到语言默认后缀
+ *      并给出提示；
+ *   3. 若记忆值为空（TXT 未输入），使用 LANGUAGE_EXTENSIONS[language] 兜底。
+ *
+ * 为什么不再读输入框 DOM 值（getCustomFileExtension）？
+ *   · 输入框的值可能未经过 change 校验（用户输入后未失焦）；
+ *   · 直接读 DOM 会绕过跨语言占用校验，导致 TXT 生成 .py 文件；
+ *   · 记忆值才是"已校验的权威来源"。
+ *
  * 编码决策：
  *   1. 用户显式选择的编码优先；
  *   2. 当前编码为 'auto' 时按扩展名推荐编码；
@@ -808,19 +882,33 @@ async function handleDownloadClick() {
         return;
     }
 
-    // ---- 1. 确定文件后缀 ----
-    const languageDefaultExtension = LANGUAGE_EXTENSIONS[EditorState.currentLanguage] || 'txt';
-    let fileExtension = getCustomFileExtension();
+    const currentLanguage = EditorState.currentLanguage;
+    const languageDefaultExtension = LANGUAGE_EXTENSIONS[currentLanguage] || 'txt';
+
+    // ---- 1. 从记忆读取后缀（含二次校验） ----
+    if (!EditorState.languageExtensionMap
+        || typeof EditorState.languageExtensionMap !== 'object') {
+        EditorState.languageExtensionMap = {};
+    }
+    let fileExtension = EditorState.languageExtensionMap[currentLanguage] || '';
+
+    // 二次校验：拦截未失焦时乐观写入的非法值
+    if (fileExtension && !isExtensionAllowedForLanguage(currentLanguage, fileExtension)) {
+        showToast(
+            'ℹ️ 输入的后缀 "' + fileExtension + '" 无效，已使用默认后缀 .' + languageDefaultExtension,
+            true
+        );
+        fileExtension = '';
+    }
+
+    // 兜底默认
     if (!fileExtension) {
         fileExtension = languageDefaultExtension;
     }
-    const mimeType = (fileExtension === languageDefaultExtension)
-        ? (MIME_TYPES[EditorState.currentLanguage] || 'text/plain')
-        : 'text/plain';
 
-    // 注：本次重构已废弃 addToFileExtensionHistory 调用。
-    //     后缀记忆仅由 languageExtensionMap 承担，
-    //     下载时不再向全局历史写入。
+    const mimeType = (fileExtension === languageDefaultExtension)
+        ? (MIME_TYPES[currentLanguage] || 'text/plain')
+        : 'text/plain';
 
     // ---- 2. 解析导出编码 ----
     let exportEncoding = EditorState.currentEncoding;
