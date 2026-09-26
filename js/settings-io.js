@@ -5,21 +5,16 @@
  * ============================================================================
  *
  * 【本次重构】
- *   1. 从 SETTINGS_EXPORTABLE_KEYS 与 SETTINGS_VALUE_VALIDATORS 中
- *      移除 FILE_EXTENSION_HISTORY 相关项：
- *      · 新版后缀系统已废弃此键；
- *      · 若仍导出/导入，会误导用户以为它有用；
- *      · 存量数据由 file-io.js 初始化时一次性清理。
+ *   为新增的 TXT_EXTENSION_HISTORY 增加导出 / 导入支持：
+ *     · 加入 SETTINGS_EXPORTABLE_KEYS（在 config.js 中已处理）；
+ *     · 在 SETTINGS_VALUE_VALIDATORS 中新增校验器：
+ *         - 必须是数组；
+ *         - 元素必须是字符串；
+ *         - 每个元素长度不超过 CONFIG.FILE_EXTENSION_MAX_LENGTH；
+ *         - 数组长度不超过 CONFIG.FILE_EXTENSION_HISTORY_MAX * 4
+ *           （宽松上限，允许历史迁移时的短暂超限）。
  *
- *   2. 保留全部原有导出接口与行为：
- *      exportAllSettings / importAllSettingsFromFile / setupSettingsIOEvents。
- *
- *   3. 保留全部校验规则（除已移除的 FILE_EXTENSION_HISTORY）。
- *
- *   4. 保留 skipBeforeUnload 双字段（布尔 + 过期时间戳）写入逻辑。
- *
- *   5. 保留 UTF-8 BOM 剥离、_meta 校验、逐项写入回读、
- *      Toast 汇总、幂等保护、键盘导航、外部点击关闭。
+ *   其余逻辑完全保持原样。
  * ============================================================================
  */
 
@@ -35,15 +30,11 @@ import { EditorState } from './state.js';
 
 // ==================== 模块级常量 ====================
 
-// 设置文件标识（写入 _meta.type，导入时校验）
 const SETTINGS_FILE_TYPE = 'code-editor-settings';
-
-// 设置文件版本（写入 _meta.version，供未来兼容性判断）
 const SETTINGS_FILE_VERSION = 1;
 
 // ==================== 模块级状态 ====================
 
-// 幂等保护：防止 setupSettingsIOEvents 被重复调用导致监听器累积
 let isSettingsIOInitialized = false;
 
 // ==================== 下拉菜单显示 / 隐藏 ====================
@@ -91,11 +82,7 @@ function focusFirstSettingsMenuItem() {
 /**
  * 校验规则表：storageKey → 校验函数。
  *
- * 返回 true 表示值格式合法，可以写入；false 表示跳过该项。
- * 未在表中定义的键（未来新增）宽松放行，避免阻塞主流程。
- *
- * 说明：本次重构后不再包含 FILE_EXTENSION_HISTORY 校验器，
- *       该键已废弃，不再导入导出。
+ * 本次新增 TXT_EXTENSION_HISTORY 校验器。
  */
 const SETTINGS_VALUE_VALIDATORS = {
     [STORAGE_KEYS.THEME]: function(value) {
@@ -200,12 +187,22 @@ const SETTINGS_VALUE_VALIDATORS = {
             if (extensionValue.length > CONFIG.FILE_EXTENSION_MAX_LENGTH) return false;
         }
         return true;
+    },
+    // 本次新增：TXT 后缀历史校验器。
+    [STORAGE_KEYS.TXT_EXTENSION_HISTORY]: function(value) {
+        if (!Array.isArray(value)) return false;
+        if (value.length > CONFIG.FILE_EXTENSION_HISTORY_MAX * 4) return false;
+        for (let index = 0; index < value.length; index++) {
+            const item = value[index];
+            if (typeof item !== 'string') return false;
+            if (item.length > CONFIG.FILE_EXTENSION_MAX_LENGTH) return false;
+        }
+        return true;
     }
 };
 
 /**
  * 判定单个设置项的值是否合法。
- * 未在表中定义的键宽松放行；校验函数抛错时视为不合法。
  */
 function isSettingValueValid(settingKey, settingValue) {
     const validatorFunction = SETTINGS_VALUE_VALIDATORS[settingKey];
@@ -222,9 +219,6 @@ function isSettingValueValid(settingKey, settingValue) {
 
 // ==================== 辅助工具 ====================
 
-/**
- * 剥离 UTF-8 BOM。
- */
 function stripByteOrderMark(text) {
     if (!text) return '';
     if (text.charCodeAt(0) === 0xFEFF) {
@@ -233,9 +227,6 @@ function stripByteOrderMark(text) {
     return text;
 }
 
-/**
- * 生成文件名时间戳：YYYYMMDD-HHMMSS。
- */
 function buildTimestampForFilename(dateObject) {
     const year = dateObject.getFullYear();
     const month = String(dateObject.getMonth() + 1).padStart(2, '0');
@@ -246,9 +237,6 @@ function buildTimestampForFilename(dateObject) {
     return year + month + day + '-' + hour + minute + second;
 }
 
-/**
- * 将任意值序列化为 localStorage 字符串。
- */
 function serializeSettingValue(settingValue) {
     return JSON.stringify(settingValue);
 }
@@ -305,9 +293,6 @@ export function exportAllSettings() {
 
 // ==================== 导入 ====================
 
-/**
- * 解析 JSON 文本并返回顶层对象。
- */
 function parseSettingsJsonText(jsonText) {
     let parsedPayload;
     try {
@@ -324,9 +309,6 @@ function parseSettingsJsonText(jsonText) {
     return parsedPayload;
 }
 
-/**
- * 校验 _meta 段。
- */
 function validateSettingsMeta(parsedPayload) {
     const metaObject = parsedPayload._meta;
     const hasMetaObject = metaObject
@@ -348,9 +330,6 @@ function validateSettingsMeta(parsedPayload) {
     return true;
 }
 
-/**
- * 统计导入数据中与 SETTINGS_EXPORTABLE_KEYS 匹配的键数。
- */
 function countMatchedSettingsKeys(importedData) {
     let totalMatchedCount = 0;
     for (let index = 0; index < SETTINGS_EXPORTABLE_KEYS.length; index++) {
@@ -362,9 +341,6 @@ function countMatchedSettingsKeys(importedData) {
     return totalMatchedCount;
 }
 
-/**
- * 覆盖确认 + 未保存代码提醒。
- */
 function confirmOverwriteSettings(totalMatchedCount) {
     const overwriteConfirmed = confirm(
         '导入将覆盖当前 ' + totalMatchedCount + ' 项设置（主题、字体、语言、编码等）。\n' +
@@ -385,9 +361,6 @@ function confirmOverwriteSettings(totalMatchedCount) {
     return true;
 }
 
-/**
- * 逐项校验 + 写入 + 回读。
- */
 function applySettingsToStorage(importedData) {
     const appliedKeys = [];
     const skippedKeys = [];
@@ -425,9 +398,6 @@ function applySettingsToStorage(importedData) {
     };
 }
 
-/**
- * 汇总导入结果并通过 Toast 展示。
- */
 function reportImportResult(appliedKeys, skippedKeys, failedKeys) {
     let resultMessage = '📥 已导入 ' + appliedKeys.length + ' 项设置';
     if (skippedKeys.length > 0) {
@@ -457,9 +427,6 @@ function reportImportResult(appliedKeys, skippedKeys, failedKeys) {
     return appliedKeys.length > 0;
 }
 
-/**
- * 主导入入口。
- */
 export function importAllSettingsFromFile(selectedFile) {
     if (!selectedFile) return;
 
@@ -523,22 +490,17 @@ export function importAllSettingsFromFile(selectedFile) {
 
 // ==================== 事件绑定 ====================
 
-/**
- * 绑定设置导出 / 导入模块的全部事件。
- */
 export function setupSettingsIOEvents() {
     if (isSettingsIOInitialized) return;
     if (!DOM.btnSettingsIO || !DOM.settingsIODropdown) return;
 
     isSettingsIOInitialized = true;
 
-    // ---- 1. 齿轮按钮点击：切换下拉菜单 ----
     DOM.btnSettingsIO.addEventListener('click', function(event) {
         event.stopPropagation();
         toggleSettingsDropdown();
     });
 
-    // ---- 2. 齿轮按钮键盘 ----
     DOM.btnSettingsIO.addEventListener('keydown', function(event) {
         if (event.key === 'Escape' && isSettingsDropdownVisible()) {
             event.preventDefault();
@@ -554,7 +516,6 @@ export function setupSettingsIOEvents() {
         }
     });
 
-    // ---- 3. 菜单项点击 ----
     DOM.settingsIODropdown.addEventListener('click', function(event) {
         const menuItem = event.target.closest('.settings-io-item');
         if (!menuItem) return;
@@ -569,7 +530,6 @@ export function setupSettingsIOEvents() {
         }
     });
 
-    // ---- 4. 菜单项键盘导航 ----
     DOM.settingsIODropdown.addEventListener('keydown', function(event) {
         const menuItems = Array.from(
             DOM.settingsIODropdown.querySelectorAll('.settings-io-item')
@@ -605,7 +565,6 @@ export function setupSettingsIOEvents() {
         }
     });
 
-    // ---- 5. 文件选择 ----
     if (DOM.settingsFileInput) {
         DOM.settingsFileInput.addEventListener('change', function(event) {
             const selectedFile = event.target.files[0];
@@ -616,7 +575,6 @@ export function setupSettingsIOEvents() {
         });
     }
 
-    // ---- 6. 外部点击关闭 ----
     document.addEventListener('pointerdown', function(event) {
         if (!isSettingsDropdownVisible()) return;
         const wrapperElement = DOM.settingsIOWrapper;
@@ -624,7 +582,6 @@ export function setupSettingsIOEvents() {
         hideSettingsDropdown();
     }, { passive: true });
 
-    // ---- 7. 全局 Escape ----
     document.addEventListener('keydown', function(event) {
         if (event.key === 'Escape' && isSettingsDropdownVisible()) {
             hideSettingsDropdown();
