@@ -10,7 +10,7 @@
     │   └── styles.css                ← 全站样式（含四主题变量 / 组件 / 响应式）
     └── js/
         ├── main.js                   ← 引导入口（script type="module"）
-        ├── config.js                 ← 常量 / 存储键 / 编码映射 / 扩展名→编码 / 设置导出键集
+        ├── config.js                 ← 常量 / 存储键 / 编码映射 / 后缀合法集合 / 设置导出键集
         ├── util.js                   ← 通用工具 / 正则安全（单一事实来源）
         ├── state.js                  ← EditorState 全局状态
         ├── dom.js                    ← DOM 元素引用
@@ -25,7 +25,7 @@
         ├── search.js                 ← 查找替换 + 搜索 Worker
         ├── editor-api.js             ← 统一编辑入口（循环依赖解耦）
         ├── editor.js                 ← 编辑器核心（键盘 / 缩进 / 注释 / 粘贴）
-        ├── file-io.js                ← 文件内容 I/O（导入 / 下载 / 拖拽 / 后缀联动）
+        ├── file-io.js                ← 文件内容 I/O（导入 / 下载 / 拖拽 / 后缀约束）
         ├── directory-io.js           ← 目录 / 保存位置管理（更改 / 打开 / Picker 封装）
         ├── output.js                 ← 输出面板
         ├── java-runner.js            ← Java 编译运行（Piston API）
@@ -42,13 +42,26 @@
         ↑
     directory-io.js   目录选择与生命周期（Picker 封装 / 权限 / startIn 记忆）
         ↑
-    file-io.js        文件内容 I/O（读写文本 / 编码转换 / 拖拽 / 后缀联动）
+    file-io.js        文件内容 I/O（读写文本 / 编码转换 / 拖拽 / 后缀约束）
 
 ### 编码模块分层
 
     encoding.js       统一入口 + 静态映射编码（UTF-8 / BOM / ANSI / ASCII）
         ↑ 委托
     gbk-codec.js      GBK 编解码（动态构建映射表 / 支持性探测 / 后台预热）
+
+### 后缀系统分层
+
+    config.js
+      └── LANGUAGE_VALID_EXTENSIONS       ← 每语言合法后缀集合（唯一权威来源）
+              ↓
+    file-io.js
+      ├── ALL_RESERVED_EXTENSIONS         ← 所有非空集合的并集（预计算 Set）
+      ├── isValidExtensionForLanguage     ← 单语言集合成员判断
+      ├── isExtensionUsedByOtherLanguage  ← 跨语言占用判断（O(1)）
+      ├── isExtensionAllowedForLanguage   ← 综合判定（区分受约束/自由模式）
+      ├── resolveExtensionForLanguage     ← 记忆恢复统一入口（含非法值回退）
+      └── commitFileExtensionValue        ← 提交统一入口（含非法值提示）
 
 ### 正则安全单一事实来源
 
@@ -65,6 +78,73 @@
       ├── settings-io.js        → config.js
       ├── ui.js                 → editor-api.js / search.js
       └── highlight.js          ← main.js（注入调度回调）
+
+## 后缀系统
+
+### 每语言合法后缀集合（LANGUAGE_VALID_EXTENSIONS）
+
+| 语言 | 合法后缀集合 | 模式 |
+|---|---|---|
+| JavaScript | `['js', 'mjs', 'cjs']` | 受约束 |
+| HTML | `['html', 'htm']` | 受约束 |
+| CSS | `['css']` | 受约束 |
+| Python | `['py', 'pyw']` | 受约束 |
+| Java | `['java']` | 受约束 |
+| Plain Text | `[]` | 自由输入 |
+
+### 两种模式
+
+| 模式 | 触发条件 | 输入框 | 下拉 | 校验 |
+|---|---|---|---|---|
+| 受约束模式 | 集合非空 | `readOnly = true` | 显示合法集合 | 严格集合成员判断 |
+| 自由模式 | 集合为空（仅 TXT） | `readOnly = false` | 不显示 | 跨语言占用判断 |
+
+### 三概念分离（避免混淆）
+
+| 概念 | 数据源 | 用途 |
+|---|---|---|
+| **后缀 → 语言** | `EXTENSION_LANGUAGE_MAP` | 导入文件时用什么语言高亮 |
+| **语言 → 合法后缀集合** | `LANGUAGE_VALID_EXTENSIONS` | 导出时约束可选后缀 |
+| **每语言当前后缀** | `EditorState.languageExtensionMap` | 用户选择记忆 |
+
+**重要**：三者不能互相推导。例如 `.json → js` 只是"高亮借用"，`json` 不会出现在 `LANGUAGE_VALID_EXTENSIONS.js` 中。
+
+### 记忆恢复流程
+
+    updateFileExtensionForLanguage(language)
+      ↓
+    resolveExtensionForLanguage(language)
+      ├── 读 EditorState.languageExtensionMap[language]
+      ├── 若合法 → 返回记忆值
+      └── 若非法（旧版遗留 / 跨语言）→ 返回 AUTO_EXTENSION_BY_LANGUAGE[language]
+      ↓
+    DOM.fileExtensionInput.value = 有效值
+    DOM.fileExtensionInput.readOnly = (集合长度 > 0)
+
+### 用户输入流程
+
+    受约束模式（readOnly）：
+      点击 → 显示下拉 → 点击项 → 写入 map → 隐藏下拉
+
+    自由模式（TXT）：
+      input → 净化显示，不写入 map（避免乐观写入非法值）
+      change / Enter → commitFileExtensionValue
+        ├── 合法 → 写入 map
+        └── 非法 → 恢复上次有效值 + Toast 提示
+
+### 导入文件行为
+
+    loadFileIntoEditor(file)
+      ↓
+    EXTENSION_LANGUAGE_MAP[ext] → switchLanguage(language)
+      ↓
+    updateFileExtensionForLanguage(language)
+      ↓
+    resolveExtensionForLanguage(language)
+      ↓
+    · 导入不更新 languageExtensionMap
+    · 理由：导入是"高亮选择"，不是"后缀选择"
+    · 用户导入 .spec 时，Python 后缀记忆仍保持原值（如 py）
 
 ## 编码支持
 
@@ -109,10 +189,16 @@
 | `editor-folded-ranges-v6` | 折叠范围数组 |
 | `editor-stdin-cache-v6` | stdin 缓存 |
 | `editor-language-extension-map-v9` | 每语言后缀映射 |
-| `editor-file-extension-history-v8` | 后缀历史列表 |
 | `editor-last-download-filename` | 上次下载文件名 |
 | `editor-code-cache-v6` | 代码缓存（localStorage 兜底） |
 | `editor-dirty-flag` | 异常关闭脏标记 |
+
+### 已废弃 / 仅供清理
+
+| 键 | 说明 |
+|---|---|
+| `editor-file-extension-v8` | v8.4.1 单一后缀键；初始化时迁移到 TXT 后清理 |
+| `editor-file-extension-history-v8` | 旧版全局后缀历史；初始化时一次性清理，不再使用 |
 
 ### 查找替换
 
@@ -160,3 +246,6 @@
 3. **正则安全检测为启发式**：19 条危险模式覆盖绝大多数 ReDoS 攻击形态，但无法做到理论完备。Worker 内也运行同一份检测。
 4. **Web Worker 不可用时降级**：某些 CSP / 隐私模式 / 旧浏览器下 `new Worker` 会抛错，此时查找替换自动走主线程同步搜索，功能不中断。
 5. **File System Access API 不可用时降级**：Firefox / Safari 部分版本不支持，此时下载自动回退到浏览器原生下载。
+6. **导入文件不更新后缀记忆**：导入是“高亮选择”，不是“后缀选择”。用户导入 `.spec` 时 Python 后缀记忆仍保持原值（如 `py`）。这是有意为之，避免“导入行为”污染“用户选择”。
+7. **TXT 自由输入拒绝跨语言后缀**：TXT 可以输入任意后缀，但不能使用其他语言已声明的后缀（如 `py` / `html` / `js`）。这是为了避免 TXT 抢占其他语言的语义。若确实需要将 TXT 保存为 `.py`，请在 Python 模式下操作。
+8. **`FILE_EXTENSION_HISTORY` 已废弃**：旧版全局后缀历史会导致跨语言污染，新版仅保留 `languageExtensionMap` 作为唯一记忆。存储键在初始化时一次性清理，不再导入导出。

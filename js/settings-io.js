@@ -5,20 +5,16 @@
  * ============================================================================
  *
  * 【本次重构】
- *   1. confirmOverwriteSettings 中的未保存代码提示文案改进（P2）：
- *      原提示："未保存的代码可能丢失。建议先按 Ctrl+S 保存。"
- *      与本项目的双层自动保存机制不符——代码已自动保存到
- *      IndexedDB / localStorage，页面重载后会有恢复提示。
- *
- *      新提示明确区分"自动保存"与"明确保存"两种语义：
- *        · 自动保存的内容会在页面重载后提示恢复；
- *        · 但自动保存不是"明确保存"，仍建议先按 Ctrl+S。
+ *   1. 从 SETTINGS_EXPORTABLE_KEYS 与 SETTINGS_VALUE_VALIDATORS 中
+ *      移除 FILE_EXTENSION_HISTORY 相关项：
+ *      · 新版后缀系统已废弃此键；
+ *      · 若仍导出/导入，会误导用户以为它有用；
+ *      · 存量数据由 file-io.js 初始化时一次性清理。
  *
  *   2. 保留全部原有导出接口与行为：
  *      exportAllSettings / importAllSettingsFromFile / setupSettingsIOEvents。
  *
- *   3. 保留 SETTINGS_VALUE_VALIDATORS 全部校验规则：
- *      枚举白名单 / 数值范围 / 结构校验 / 数组校验 / 字符串长度。
+ *   3. 保留全部校验规则（除已移除的 FILE_EXTENSION_HISTORY）。
  *
  *   4. 保留 skipBeforeUnload 双字段（布尔 + 过期时间戳）写入逻辑。
  *
@@ -98,13 +94,8 @@ function focusFirstSettingsMenuItem() {
  * 返回 true 表示值格式合法，可以写入；false 表示跳过该项。
  * 未在表中定义的键（未来新增）宽松放行，避免阻塞主流程。
  *
- * 规则覆盖面：
- *   · 枚举型 —— theme / language / encoding / javaVersion 严格白名单
- *   · 数值型 —— fontSize / indentSize / 弹窗尺寸 / textarea 高度范围限定
- *   · 结构型 —— indent / modalPosition / modalSize / languageExtensionMap
- *               要求对象且字段类型正确
- *   · 数组型 —— foldedRanges / fileExtensionHistory 要求元素结构合法
- *   · 字符串型 —— 限制长度上限，避免恶意超长字符串挤爆 localStorage
+ * 说明：本次重构后不再包含 FILE_EXTENSION_HISTORY 校验器，
+ *       该键已废弃，不再导入导出。
  */
 const SETTINGS_VALUE_VALIDATORS = {
     [STORAGE_KEYS.THEME]: function(value) {
@@ -197,16 +188,6 @@ const SETTINGS_VALUE_VALIDATORS = {
     [STORAGE_KEYS.LAST_DOWNLOAD_FILENAME]: function(value) {
         return typeof value === 'string' && value.length <= 255;
     },
-    [STORAGE_KEYS.FILE_EXTENSION_HISTORY]: function(value) {
-        if (!Array.isArray(value)) return false;
-        if (value.length > CONFIG.FILE_EXTENSION_HISTORY_MAX * 4) return false;
-        for (let index = 0; index < value.length; index++) {
-            const item = value[index];
-            if (typeof item !== 'string') return false;
-            if (item.length > CONFIG.FILE_EXTENSION_MAX_LENGTH) return false;
-        }
-        return true;
-    },
     [STORAGE_KEYS.LANGUAGE_EXTENSION_MAP]: function(value) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
         const validLanguages = ['js', 'html', 'css', 'python', 'java', 'txt'];
@@ -243,8 +224,6 @@ function isSettingValueValid(settingKey, settingValue) {
 
 /**
  * 剥离 UTF-8 BOM。
- * Windows 记事本 / 部分编辑器保存的 JSON 会带 BOM（U+FEFF），
- * 直接 JSON.parse 会抛错。此函数在解析前剥离。
  */
 function stripByteOrderMark(text) {
     if (!text) return '';
@@ -256,7 +235,6 @@ function stripByteOrderMark(text) {
 
 /**
  * 生成文件名时间戳：YYYYMMDD-HHMMSS。
- * 使用本地时间，便于用户识别。
  */
 function buildTimestampForFilename(dateObject) {
     const year = dateObject.getFullYear();
@@ -270,8 +248,6 @@ function buildTimestampForFilename(dateObject) {
 
 /**
  * 将任意值序列化为 localStorage 字符串。
- * 与本项目 saveToLocalStorage 的既有行为完全一致，保证读回时
- * loadFromLocalStorage 的 JSON.parse 解析路径一致。
  */
 function serializeSettingValue(settingValue) {
     return JSON.stringify(settingValue);
@@ -331,7 +307,6 @@ export function exportAllSettings() {
 
 /**
  * 解析 JSON 文本并返回顶层对象。
- * 失败时返回 null，并在内部显示 Toast。
  */
 function parseSettingsJsonText(jsonText) {
     let parsedPayload;
@@ -351,8 +326,6 @@ function parseSettingsJsonText(jsonText) {
 
 /**
  * 校验 _meta 段。
- * 返回 true 表示继续导入，false 表示中止。
- * 若 _meta.type 缺失但 _meta 存在其他字段，弹确认让用户决定。
  */
 function validateSettingsMeta(parsedPayload) {
     const metaObject = parsedPayload._meta;
@@ -391,12 +364,6 @@ function countMatchedSettingsKeys(importedData) {
 
 /**
  * 覆盖确认 + 未保存代码提醒。
- * 返回 true 表示用户同意继续，false 表示中止。
- *
- * 【本次重构】未保存代码提示文案更准确：
- *   原提示"未保存的代码可能丢失"与本项目的双层自动保存机制不符。
- *   自动保存的内容会在页面重载后提示恢复，因此不能说"可能丢失"。
- *   但自动保存 ≠ 明确保存，仍建议用户按 Ctrl+S。
  */
 function confirmOverwriteSettings(totalMatchedCount) {
     const overwriteConfirmed = confirm(
@@ -420,7 +387,6 @@ function confirmOverwriteSettings(totalMatchedCount) {
 
 /**
  * 逐项校验 + 写入 + 回读。
- * 返回 { appliedKeys, skippedKeys, failedKeys } 三个数组。
  */
 function applySettingsToStorage(importedData) {
     const appliedKeys = [];
@@ -443,7 +409,6 @@ function applySettingsToStorage(importedData) {
             localStorage.setItem(storageKey, serializedValue);
             const readBackValue = localStorage.getItem(storageKey);
             if (readBackValue === null) {
-                // 无痕模式 / 存储策略下可能出现"写入未持久化"
                 throw new Error('写入未持久化');
             }
             appliedKeys.push(storageKey);
@@ -462,7 +427,6 @@ function applySettingsToStorage(importedData) {
 
 /**
  * 汇总导入结果并通过 Toast 展示。
- * 返回是否至少有一项成功写入。
  */
 function reportImportResult(appliedKeys, skippedKeys, failedKeys) {
     let resultMessage = '📥 已导入 ' + appliedKeys.length + ' 项设置';
@@ -495,7 +459,6 @@ function reportImportResult(appliedKeys, skippedKeys, failedKeys) {
 
 /**
  * 主导入入口。
- * 由 DOM.settingsFileInput 的 change 事件调用，传入 File 对象。
  */
 export function importAllSettingsFromFile(selectedFile) {
     if (!selectedFile) return;
@@ -542,9 +505,6 @@ export function importAllSettingsFromFile(selectedFile) {
             return;
         }
 
-        // 用户已在 confirmOverwriteSettings 中明确同意丢弃未保存代码。
-        // 同时置位布尔标志与过期时间戳，让 ui.js 的 beforeunload 处理器在
-        // TTL 窗口内放行 location.reload()，避免浏览器原生二次确认框。
         EditorState.skipBeforeUnload = true;
         EditorState.skipBeforeUnloadExpiresAt =
             Date.now() + CONFIG.SETTINGS_SKIP_BEFOREUNLOAD_TTL_MS;
@@ -565,8 +525,6 @@ export function importAllSettingsFromFile(selectedFile) {
 
 /**
  * 绑定设置导出 / 导入模块的全部事件。
- *
- * 幂等：首次调用后 isSettingsIOInitialized = true，后续调用直接返回。
  */
 export function setupSettingsIOEvents() {
     if (isSettingsIOInitialized) return;
@@ -580,7 +538,7 @@ export function setupSettingsIOEvents() {
         toggleSettingsDropdown();
     });
 
-    // ---- 2. 齿轮按钮键盘：↓ / Enter / Space 打开并聚焦首项；Escape 关闭 ----
+    // ---- 2. 齿轮按钮键盘 ----
     DOM.btnSettingsIO.addEventListener('keydown', function(event) {
         if (event.key === 'Escape' && isSettingsDropdownVisible()) {
             event.preventDefault();
@@ -611,7 +569,7 @@ export function setupSettingsIOEvents() {
         }
     });
 
-    // ---- 4. 菜单项键盘导航（↑↓ Enter Space Escape Tab） ----
+    // ---- 4. 菜单项键盘导航 ----
     DOM.settingsIODropdown.addEventListener('keydown', function(event) {
         const menuItems = Array.from(
             DOM.settingsIODropdown.querySelectorAll('.settings-io-item')
@@ -643,7 +601,6 @@ export function setupSettingsIOEvents() {
             hideSettingsDropdown();
             if (DOM.btnSettingsIO) DOM.btnSettingsIO.focus();
         } else if (event.key === 'Tab') {
-            // 允许 Tab 自然移出菜单；同时关闭菜单
             hideSettingsDropdown();
         }
     });
@@ -655,12 +612,11 @@ export function setupSettingsIOEvents() {
             if (selectedFile) {
                 importAllSettingsFromFile(selectedFile);
             }
-            // 复位以便用户重复选择同一个文件
             event.target.value = '';
         });
     }
 
-    // ---- 6. 外部点击关闭（pointerdown 兼顾鼠标与触屏，被动监听不阻塞滚动） ----
+    // ---- 6. 外部点击关闭 ----
     document.addEventListener('pointerdown', function(event) {
         if (!isSettingsDropdownVisible()) return;
         const wrapperElement = DOM.settingsIOWrapper;

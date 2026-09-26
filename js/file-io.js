@@ -1,42 +1,50 @@
 // filename: js/file-io.js
 /**
  * ============================================================================
- * file-io.js — 文件导入 / 下载 / 拖拽 / 后缀联动 / 历史下拉
+ * file-io.js — 文件导入 / 下载 / 拖拽 / 后缀约束
  * ============================================================================
  *
  * 【本次重构】
- *   1. 导入编码决策修复（P0）：
- *      原实现在检测到 BOM 时无条件覆盖 finalEncoding 并调用
- *      updateEncodingDisplay（会写 localStorage、改下拉框、改持久化）。
- *      这会导致用户显式选择的编码被 BOM 覆盖。
+ *   后缀系统从"预设 + 全局历史"重构为"权威合法集合 + 每语言记忆"。
  *
- *      新语义：
- *        · detectedBomEncoding 只决定"本次导入文件的实际编码"；
- *        · 若 EditorState.currentEncoding === 'auto'，
- *          更新下拉框与持久化（因为 auto 本来就是动态判断）；
- *        · 若用户显式选了编码，仅调用 updateEncodingStatusOnly
- *          更新状态栏显示，不改用户选择，不写 localStorage。
+ *   1. 根因诊断：
+ *      · 原实现的下拉数据源 = LANGUAGE_PRESET_EXTENSIONS + FILE_EXTENSION_HISTORY；
+ *      · FILE_EXTENSION_HISTORY 是全局数组，无语言隔离；
+ *      · TXT 输入 'py' 后，'py' 进入全局历史，导致 HTML / JS / CSS / Java
+ *        的下拉都会出现 'py'；
+ *      · 反向亦然：Python 下拉可能出现 'bat' / 'html' / 'md' 等。
+ *      结果：违背"相应语言只能是相应的后缀"的语义。
  *
- *   2. 下载流程修复（P1）：
- *      原实现先走目录保存分支，分支内 prompt 一次文件名；
- *      若目录写入失败回退浏览器下载，又 prompt 一次。
- *      用户可能被要求输入两次文件名。
+ *   2. 新模型：
+ *      · LANGUAGE_VALID_EXTENSIONS（来自 config.js）为唯一权威来源；
+ *      · 彻底废弃 FILE_EXTENSION_HISTORY 及其全部读写函数；
+ *      · 记忆结构 EditorState.languageExtensionMap 保持不变，
+ *        但所有读取路径经 resolveExtensionForLanguage 统一校验，
+ *        保证非法值（旧版遗留 / 跨语言）一律回退到默认值；
+ *      · 新增跨语言占用校验 isExtensionUsedByOtherLanguage，
+ *        供 TXT 自由输入模式使用；
+ *      · 预计算 ALL_RESERVED_EXTENSIONS Set，将占用校验从 O(n) 降到 O(1)。
  *
- *      新流程：
- *        · 先尝试获取目录（成功与否决定后续分支）；
- *        · 只在真正开始写文件前 prompt 一次；
- *        · 目录写入失败回退下载时复用同一份文件名。
+ *   3. UI 模式自动切换：
+ *      · 集合非空 → 受约束模式（readOnly + 下拉选择）；
+ *      · 集合为空 → 自由模式（可编辑 + 失焦校验）。
  *
- *   3. 删除目录句柄失败时的 clearDirectoryHandle 异常不影响主流程。
+ *   4. 一次性数据清理：
+ *      · 启动时删除历史遗留的 FILE_EXTENSION_HISTORY 键；
+ *      · 同时全量校正 languageExtensionMap 中可能存在的非法值。
  *
- *   4. 保留全部原有导出接口与行为：
+ *   5. 保留全部原有导出接口与行为（除已废弃的历史函数）：
  *      bindImportEvents / bindDragAndDropEvents / bindDownloadEvents /
  *      sanitizeFileExtension / getCustomFileExtension /
- *      loadFileExtensionHistory / saveFileExtensionHistory /
- *      addToFileExtensionHistory / removeFromFileExtensionHistory /
  *      updateFileExtensionForLanguage / showFileExtensionDropdown /
  *      hideFileExtensionDropdown / updateFileExtensionPlaceholder /
  *      initializeFileExtensionInput。
+ *
+ * 【删除的导出接口（已无调用方）】
+ *   · loadFileExtensionHistory
+ *   · saveFileExtensionHistory
+ *   · addToFileExtensionHistory
+ *   · removeFromFileExtensionHistory
  * ============================================================================
  */
 
@@ -48,9 +56,7 @@ import {
     EXTENSION_DEFAULT_ENCODING,
     LANGUAGE_EXTENSIONS,
     AUTO_EXTENSION_BY_LANGUAGE,
-    LANGUAGE_ALLOW_CUSTOM_EXTENSION,
-    LANGUAGE_SHOW_HISTORY_DROPDOWN,
-    LANGUAGE_PRESET_EXTENSIONS,
+    LANGUAGE_VALID_EXTENSIONS,
     MIME_TYPES,
     EXTENSION_LANGUAGE_MAP,
     VALID_TEXT_FILE_EXTENSION_REGEX
@@ -75,7 +81,7 @@ import {
     clearDirectoryHandle
 } from './storage.js';
 
-// ==================== 模块级标志 ====================
+// ==================== 模块级状态 ====================
 
 // 输入净化标志：程序化修改 value 期间置位，防止二次 input 事件重复处理。
 let isSanitizingFileExtension = false;
@@ -83,21 +89,41 @@ let isSanitizingFileExtension = false;
 // 幂等保护标志：防止 initializeFileExtensionInput 被重复调用。
 let isFileExtensionInputInitialized = false;
 
+/**
+ * 所有语言合法后缀的并集（预计算 Set）。
+ *
+ * 用途：将"某个后缀是否被其他语言占用"的判断从 O(n × 集合长度)
+ * 降为 O(1) 查询。仅包含非空集合（TXT 的 [] 不贡献任何元素）。
+ */
+const ALL_RESERVED_EXTENSIONS = (function buildReservedExtensionsSet() {
+    const reservedSet = new Set();
+    const languageKeys = Object.keys(LANGUAGE_VALID_EXTENSIONS);
+    for (let languageIndex = 0; languageIndex < languageKeys.length; languageIndex++) {
+        const languageKey = languageKeys[languageIndex];
+        const validList = LANGUAGE_VALID_EXTENSIONS[languageKey];
+        for (let extensionIndex = 0; extensionIndex < validList.length; extensionIndex++) {
+            reservedSet.add(validList[extensionIndex]);
+        }
+    }
+    return reservedSet;
+})();
+
 // ==================== 导入 ====================
 
 /**
  * 加载文件到编辑器。
  *
- * 编码决策顺序（本次重构后）：
+ * 编码决策顺序：
  *   1. BOM 检测：决定"本次文件的实际编码"。
  *      · 若 EditorState.currentEncoding === 'auto' → 同步下拉框与持久化；
  *      · 若用户显式选择 → 仅更新状态栏，不改用户选择。
  *   2. 若当前编码为 'auto'，按扩展名推荐编码（.bat/.cmd → 'ansi'）；
  *   3. 若仍未定编码，按 UTF-8 有效性检测。
  *
- * 'gbk' 与 'ansi' 的处理差异：
- *   · 'gbk'   —— 不支持时硬报错，降级为 UTF-8
- *   · 'ansi'  —— 不支持时软回退 ASCII，并给出 info 提示
+ * 后缀记忆行为（本次重构后）：
+ *   · 导入文件**不更新** languageExtensionMap；
+ *   · 理由：导入的语言选择是"高亮选择"，不是"后缀选择"；
+ *   · 用户导入 .spec 时不应该让 Python 后缀记忆变为 'spec'。
  */
 function loadFileIntoEditor(file) {
     if (!file) return;
@@ -122,24 +148,18 @@ function loadFileIntoEditor(file) {
 
         // ---- 编码决策 ----
         if (detectedBomEncoding) {
-            // 1. BOM 检测优先：决定本次文件实际编码
             finalEncoding = detectedBomEncoding;
-
             if (userExplicitEncoding === 'auto') {
-                // 用户没显式选，auto 语义就是"动态判断"，同步下拉框与持久化
                 updateEncodingDisplay(finalEncoding);
             } else {
-                // 用户显式选了编码，只更新状态栏，不覆盖用户选择
                 updateEncodingStatusOnly(finalEncoding);
             }
             showToast('📂 检测到编码: ' + ENCODING_DISPLAY_NAMES[finalEncoding]);
         } else if (finalEncoding === 'auto') {
-            // 2. 当前为自动检测
             const fileExtension = file.name.split('.').pop().toLowerCase();
             const recommendedEncoding = EXTENSION_DEFAULT_ENCODING[fileExtension];
 
             if (recommendedEncoding === 'ansi') {
-                // .bat / .cmd：使用 ANSI（简体中文 Windows 上即 GBK）
                 finalEncoding = 'ansi';
                 updateEncodingStatusOnly(finalEncoding);
                 if (isGBKSupported()) {
@@ -158,12 +178,10 @@ function loadFileIntoEditor(file) {
                     showToast('⚠️ 当前浏览器不支持 GBK 解码，已按 UTF-8 处理', true);
                 }
             } else if (isValidUTF8(arrayBuffer)) {
-                // 扩展名未推荐特殊编码，且字节流是有效 UTF-8
                 finalEncoding = 'utf-8';
                 updateEncodingStatusOnly(finalEncoding);
                 showToast('📂 未检测到 BOM，默认使用 UTF-8');
             } else {
-                // 字节流不是有效 UTF-8，提示用户
                 finalEncoding = 'utf-8';
                 updateEncodingStatusOnly(finalEncoding);
                 showToast(
@@ -172,14 +190,11 @@ function loadFileIntoEditor(file) {
                 );
             }
         } else {
-            // 3. 用户显式选择了编码
             if (finalEncoding === 'gbk' && !isGBKSupported()) {
-                // 明确选择的 'gbk' 不支持时硬报错
                 showToast('⚠️ 当前浏览器不支持 GBK 解码，将按 UTF-8 处理', true);
                 finalEncoding = 'utf-8';
             }
             if (finalEncoding === 'ansi' && !isGBKSupported()) {
-                // 用户显式选择 'ansi' 但 GBK 不支持，提示回退
                 showToast('ℹ️ ANSI 回退为 ASCII（当前浏览器不支持 GBK）');
             }
             updateEncodingStatusOnly(finalEncoding);
@@ -195,14 +210,13 @@ function loadFileIntoEditor(file) {
             return;
         }
 
-        // 补传 finalCursorStart / finalCursorEnd 为 (0, 0)，
-        // 使导入后的光标位于文档开头而非末尾。
         setEditorContent(decodedText, true, false, 0, 0);
         updateFileNameDisplay(file.name);
 
         const fileExtension = file.name.split('.').pop().toLowerCase();
         if (EXTENSION_LANGUAGE_MAP[fileExtension]) {
-            // switchLanguage 内部已通过回调自动调用 updateFileExtensionForLanguage
+            // switchLanguage 内部会通过回调自动调用 updateFileExtensionForLanguage
+            // 后者使用 resolveExtensionForLanguage，保证后缀框只显示合法值。
             switchLanguage(EXTENSION_LANGUAGE_MAP[fileExtension]);
         }
         showToast('📂 已加载 ' + file.name + ' (' + ENCODING_DISPLAY_NAMES[finalEncoding] + ')');
@@ -266,122 +280,92 @@ export function sanitizeFileExtension(extensionText) {
 
 /**
  * 从输入框读取当前后缀（已净化）。
+ *
+ * 不校验合法性：合法性由 updateFileExtensionForLanguage 与输入事件保证。
  */
 export function getCustomFileExtension() {
     if (!DOM.fileExtensionInput) return '';
     return sanitizeFileExtension(DOM.fileExtensionInput.value);
 }
 
-// ==================== 后缀：历史记录管理 ====================
+// ==================== 后缀：合法性与占用校验 ====================
 
 /**
- * 读取历史后缀列表。
- * 从 localStorage 读取原始数组，逐项净化、去重、按字母排序。
- */
-export function loadFileExtensionHistory() {
-    const rawHistory = loadFromLocalStorage(STORAGE_KEYS.FILE_EXTENSION_HISTORY, []);
-    if (!Array.isArray(rawHistory)) return [];
-
-    const sanitizedSet = new Set();
-    for (let index = 0; index < rawHistory.length; index++) {
-        const sanitized = sanitizeFileExtension(rawHistory[index]);
-        if (sanitized) {
-            sanitizedSet.add(sanitized);
-        }
-    }
-
-    return Array.from(sanitizedSet).sort(function(a, b) {
-        return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
-    });
-}
-
-/**
- * 将历史后缀列表写回 localStorage。
- */
-export function saveFileExtensionHistory(historyArray) {
-    if (!Array.isArray(historyArray)) {
-        saveToLocalStorage(STORAGE_KEYS.FILE_EXTENSION_HISTORY, []);
-        return;
-    }
-
-    const sanitizedSet = new Set();
-    for (let index = 0; index < historyArray.length; index++) {
-        const sanitized = sanitizeFileExtension(historyArray[index]);
-        if (sanitized) {
-            sanitizedSet.add(sanitized);
-        }
-    }
-
-    const sortedHistory = Array.from(sanitizedSet).sort(function(a, b) {
-        return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
-    });
-
-    const limitedHistory = sortedHistory.slice(0, CONFIG.FILE_EXTENSION_HISTORY_MAX);
-    saveToLocalStorage(STORAGE_KEYS.FILE_EXTENSION_HISTORY, limitedHistory);
-}
-
-/**
- * 将新后缀加入历史记录。若已存在则忽略。
- */
-export function addToFileExtensionHistory(extensionText) {
-    const sanitized = sanitizeFileExtension(extensionText);
-    if (!sanitized) return;
-
-    const currentHistory = loadFileExtensionHistory();
-    if (currentHistory.indexOf(sanitized) !== -1) {
-        return;
-    }
-    currentHistory.push(sanitized);
-    saveFileExtensionHistory(currentHistory);
-}
-
-/**
- * 从历史记录中移除指定后缀。
- */
-export function removeFromFileExtensionHistory(extensionText) {
-    const sanitized = sanitizeFileExtension(extensionText);
-    if (!sanitized) return;
-
-    const currentHistory = loadFileExtensionHistory();
-    const filteredHistory = currentHistory.filter(function(item) {
-        return item !== sanitized;
-    });
-    if (filteredHistory.length !== currentHistory.length) {
-        saveFileExtensionHistory(filteredHistory);
-    }
-}
-
-/**
- * 合并"预设候选"与"历史记录"。
+ * 判断后缀是否属于该语言的合法集合。
  *
- * 合并规则：
- *   · 预设在前 —— 让用户一眼看到"官方推荐"；
- *   · 历史在后 —— 用户自己输入过的排到预设后面；
- *   · 净化 + 去重 —— 保证渲染列表干净；
- *   · 单项长度超限的项自动丢弃。
- *
- * @param {string} language - 当前语言
- * @returns {string[]} 合并后的候选后缀数组
+ * 语义：
+ *   · 空后缀 → false（任何语言都不接受空作为"合法后缀"）；
+ *   · 集合非空 → 严格集合成员判断；
+ *   · 集合为空（TXT）→ 返回 true，
+ *     交由 isExtensionAllowedForLanguage 做进一步的跨语言占用校验。
  */
-function buildMergedExtensionCandidates(language) {
-    const presetList = LANGUAGE_PRESET_EXTENSIONS[language] || [];
-    const historyList = loadFileExtensionHistory();
+function isValidExtensionForLanguage(language, extension) {
+    if (!extension) return false;
+    const validList = LANGUAGE_VALID_EXTENSIONS[language];
+    if (!Array.isArray(validList)) return false;
+    if (validList.length === 0) return true;
+    return validList.indexOf(extension) !== -1;
+}
 
-    const seen = new Set();
-    const mergedList = [];
-
-    function pushItem(rawItem) {
-        const sanitized = sanitizeFileExtension(rawItem);
-        if (!sanitized) return;
-        if (seen.has(sanitized)) return;
-        seen.add(sanitized);
-        mergedList.push(sanitized);
+/**
+ * 判断后缀是否被其他语言占用。
+ *
+ * 用于 TXT 自由输入场景：TXT 不能输入 py / html / js 等已被其他语言
+ * 声明的后缀，否则会导致跨语言语义混淆。
+ *
+ * 使用预计算 Set 实现 O(1) 判断。
+ */
+function isExtensionUsedByOtherLanguage(language, extension) {
+    if (!extension) return false;
+    if (!ALL_RESERVED_EXTENSIONS.has(extension)) return false;
+    // 若该后缀同时属于当前语言的合法集合，则不算"被其他语言占用"
+    const validList = LANGUAGE_VALID_EXTENSIONS[language];
+    if (Array.isArray(validList) && validList.indexOf(extension) !== -1) {
+        return false;
     }
+    return true;
+}
 
-    for (let i = 0; i < presetList.length; i++) pushItem(presetList[i]);
-    for (let i = 0; i < historyList.length; i++) pushItem(historyList[i]);
+/**
+ * 综合判定：后缀是否可以在该语言下使用。
+ *
+ * 分两种模式：
+ *   · 受约束模式（集合非空）→ 只需在集合内；
+ *   · 自由模式（集合为空）  → 只要不被其他语言占用即可。
+ */
+function isExtensionAllowedForLanguage(language, extension) {
+    if (!extension) return false;
+    const validList = LANGUAGE_VALID_EXTENSIONS[language];
+    if (Array.isArray(validList) && validList.length > 0) {
+        return validList.indexOf(extension) !== -1;
+    }
+    return !isExtensionUsedByOtherLanguage(language, extension);
+}
 
-    return mergedList;
+/**
+ * 从记忆恢复语言的有效后缀（所有设置后缀路径的统一入口）。
+ *
+ * 逻辑：
+ *   1. 若 languageExtensionMap 缺失或结构损坏 → 视为空对象；
+ *   2. 读取 memoryValue = languageExtensionMap[language]；
+ *   3. 若合法 → 返回 memoryValue；
+ *   4. 若非法 → 返回 AUTO_EXTENSION_BY_LANGUAGE[language]（默认值）。
+ *
+ * 该函数保证：
+ *   · 无论存储在 map 中的历史值如何（旧版自定义 / 跨语言污染），
+ *     返回值一定是当前语言下的合法后缀；
+ *   · 未来新增语言无需改动此逻辑。
+ */
+function resolveExtensionForLanguage(language) {
+    if (!EditorState.languageExtensionMap
+        || typeof EditorState.languageExtensionMap !== 'object') {
+        EditorState.languageExtensionMap = {};
+    }
+    const memoryValue = EditorState.languageExtensionMap[language];
+    if (isExtensionAllowedForLanguage(language, memoryValue)) {
+        return memoryValue;
+    }
+    return AUTO_EXTENSION_BY_LANGUAGE[language] || '';
 }
 
 // ==================== 后缀：语言切换联动 ====================
@@ -389,15 +373,11 @@ function buildMergedExtensionCandidates(language) {
 /**
  * 语言切换时更新后缀框。
  *
- * 逻辑：
- *   1. 读取 EditorState.languageExtensionMap[language]；
- *      若未定义，使用 AUTO_EXTENSION_BY_LANGUAGE[language] 作为初值。
- *   2. 净化该值。
- *   3. 应用到输入框。
- *   4. 根据 LANGUAGE_ALLOW_CUSTOM_EXTENSION 设置 readOnly。
- *   5. 刷新 placeholder / title。
- *   6. 隐藏历史下拉（语言切换后不应保持打开）。
- *   7. 持久化映射。
+ * 关键变化（本次重构）：
+ *   · 使用 resolveExtensionForLanguage 校验记忆值，
+ *     非法值自动回退到默认；
+ *   · readOnly 由"集合是否为空"决定，不再依赖废弃常量；
+ *   · 若该语言为新语言（无记忆），用 AUTO_EXTENSION_BY_LANGUAGE 初始化。
  */
 export function updateFileExtensionForLanguage(language) {
     if (!DOM.fileExtensionInput) return;
@@ -407,54 +387,39 @@ export function updateFileExtensionForLanguage(language) {
         EditorState.languageExtensionMap = {};
     }
 
-    // 若该语言无记录，用默认值
-    if (EditorState.languageExtensionMap[language] === undefined) {
-        EditorState.languageExtensionMap[language] = AUTO_EXTENSION_BY_LANGUAGE[language] || '';
-    }
+    // 通过统一入口恢复有效值（内部会处理"未定义 / 非法"两种情况）
+    const resolvedValue = resolveExtensionForLanguage(language);
+    EditorState.languageExtensionMap[language] = resolvedValue;
 
-    // 净化（防止历史遗留非法值）
-    const sanitizedValue = sanitizeFileExtension(EditorState.languageExtensionMap[language]);
-    EditorState.languageExtensionMap[language] = sanitizedValue;
+    DOM.fileExtensionInput.value = resolvedValue;
 
-    // 应用到输入框
-    DOM.fileExtensionInput.value = sanitizedValue;
+    // 根据集合是否为空设置 readOnly
+    const validList = LANGUAGE_VALID_EXTENSIONS[language];
+    const hasFixedCollection = Array.isArray(validList) && validList.length > 0;
+    DOM.fileExtensionInput.readOnly = hasFixedCollection;
 
-    // 更新 readOnly（用 readOnly 而非 disabled，保留视觉与 hover 反馈）
-    const allowCustom = LANGUAGE_ALLOW_CUSTOM_EXTENSION[language] === true;
-    DOM.fileExtensionInput.readOnly = !allowCustom;
-
-    // 刷新提示
     updateFileExtensionPlaceholder();
-
-    // 隐藏历史下拉
     hideFileExtensionDropdown();
 
-    // 持久化映射
     saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
 }
 
-// ==================== 后缀：下拉渲染（× 删除按钮） ====================
+// ==================== 后缀：下拉渲染 ====================
 
 /**
- * 渲染历史后缀下拉列表。
+ * 渲染后缀下拉列表。
  *
- * 候选来源从"仅历史"改为"预设 + 历史"合并（见 buildMergedExtensionCandidates）。
- * 这样 Python 语言放开自定义后，用户点击后缀框立即能看到 py / pyw。
- *
- * 结构：
- *   · filterText 用于按输入过滤（小写包含匹配）。
- *   · 每项结构：<span class="file-extension-dropdown-item-text">value</span>
- *               <span class="file-extension-dropdown-item-delete">×</span>
- *   · 单击项 = 选择；单击 × = 删除（删除仅作用于历史记录，
- *     预设项删除后再次聚焦会由 buildMergedExtensionCandidates 重新补回，
- *     这符合"预设值不可删除"的语义）。
+ * 数据源：LANGUAGE_VALID_EXTENSIONS[当前语言]（唯一权威）。
+ * 无历史、无合并、无过滤、无删除按钮。
  */
-function renderFileExtensionDropdown(filterText) {
+function renderFileExtensionDropdown() {
     if (!DOM.fileExtensionDropdown) return;
 
-    // 仅允许显示历史下拉的语言才渲染
-    const currentLang = EditorState.currentLanguage;
-    if (!LANGUAGE_SHOW_HISTORY_DROPDOWN[currentLang]) {
+    const currentLanguage = EditorState.currentLanguage;
+    const validList = LANGUAGE_VALID_EXTENSIONS[currentLanguage];
+
+    // 自由模式（集合为空）→ 不显示下拉
+    if (!Array.isArray(validList) || validList.length === 0) {
         DOM.fileExtensionDropdown.style.display = 'none';
         if (DOM.fileExtensionInput) {
             DOM.fileExtensionInput.setAttribute('aria-expanded', 'false');
@@ -462,80 +427,29 @@ function renderFileExtensionDropdown(filterText) {
         return;
     }
 
-    // 合并预设 + 历史
-    const mergedCandidates = buildMergedExtensionCandidates(currentLang);
-
     const dropdownElement = DOM.fileExtensionDropdown;
     dropdownElement.innerHTML = '';
 
-    const normalizedFilter = (typeof filterText === 'string') ? filterText.toLowerCase() : '';
-    const filteredCandidates = normalizedFilter
-        ? mergedCandidates.filter(function(item) {
-            return item.toLowerCase().indexOf(normalizedFilter) !== -1;
-        })
-        : mergedCandidates;
+    const currentValue = EditorState.languageExtensionMap[currentLanguage] || '';
 
-    if (filteredCandidates.length === 0) {
-        dropdownElement.style.display = 'none';
-        if (DOM.fileExtensionInput) {
-            DOM.fileExtensionInput.setAttribute('aria-expanded', 'false');
-        }
-        return;
-    }
-
-    const currentValue = getCustomFileExtension();
-    const presetList = LANGUAGE_PRESET_EXTENSIONS[currentLang] || [];
-    const presetSanitizedSet = new Set();
-    for (let i = 0; i < presetList.length; i++) {
-        const s = sanitizeFileExtension(presetList[i]);
-        if (s) presetSanitizedSet.add(s);
-    }
-
-    for (let index = 0; index < filteredCandidates.length; index++) {
-        const extensionValue = filteredCandidates[index];
-        const isPresetItem = presetSanitizedSet.has(extensionValue);
+    for (let index = 0; index < validList.length; index++) {
+        const extensionValue = validList[index];
 
         const itemElement = document.createElement('div');
         itemElement.className = 'file-extension-dropdown-item';
         itemElement.setAttribute('role', 'option');
         itemElement.setAttribute('data-value', extensionValue);
 
-        // 文本部分
         const textElement = document.createElement('span');
         textElement.className = 'file-extension-dropdown-item-text';
         textElement.textContent = extensionValue;
         itemElement.appendChild(textElement);
 
-        // × 删除按钮（预设项不显示删除按钮，避免误删预设候选）
-        if (!isPresetItem) {
-            const deleteButtonElement = document.createElement('span');
-            deleteButtonElement.className = 'file-extension-dropdown-item-delete';
-            deleteButtonElement.textContent = '×';
-            deleteButtonElement.title = '删除该历史后缀';
-            deleteButtonElement.addEventListener('mousedown', function(event) {
-                // 用 mousedown 而非 click：避免与项自身的 mousedown 冲突。
-                event.preventDefault();
-                event.stopPropagation();
-                removeFromFileExtensionHistory(extensionValue);
-                // 刷新下拉，保持输入框当前值的过滤状态
-                const currentInputValue = DOM.fileExtensionInput ? DOM.fileExtensionInput.value : '';
-                showFileExtensionDropdown(currentInputValue);
-            });
-            itemElement.appendChild(deleteButtonElement);
-
-            // 项本身的点击（选择）—— 需要跳过 × 按钮
-            itemElement.addEventListener('mousedown', function(event) {
-                if (event.target === deleteButtonElement) return;
-                handleExtensionItemSelect(this, extensionValue);
-            });
-        } else {
-            // 预设项：点击即选择
-            itemElement.addEventListener('mousedown', function(event) {
-                event.preventDefault();
-                event.stopPropagation();
-                handleExtensionItemSelect(this, extensionValue);
-            });
-        }
+        itemElement.addEventListener('mousedown', function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            handleExtensionItemSelect(extensionValue);
+        });
 
         if (extensionValue === currentValue) {
             itemElement.classList.add('active');
@@ -554,41 +468,47 @@ function renderFileExtensionDropdown(filterText) {
 }
 
 /**
- * 下拉项被选中后的公共处理。
- * 预设项与历史项共用同一段逻辑。
+ * 下拉项被选中后的处理。
+ *
+ * 简单逻辑：写入记忆 + 更新输入框 + 隐藏下拉。
+ * 由于数据源就是合法集合，选中项必然合法，无需二次校验。
  */
-function handleExtensionItemSelect(itemElement, selectedValue) {
-    if (DOM.fileExtensionInput) {
-        DOM.fileExtensionInput.value = selectedValue;
-        DOM.fileExtensionInput.focus();
-    }
+function handleExtensionItemSelect(selectedValue) {
     if (!EditorState.languageExtensionMap
         || typeof EditorState.languageExtensionMap !== 'object') {
         EditorState.languageExtensionMap = {};
     }
     EditorState.languageExtensionMap[EditorState.currentLanguage] = selectedValue;
+
+    if (DOM.fileExtensionInput) {
+        DOM.fileExtensionInput.value = selectedValue;
+        DOM.fileExtensionInput.focus();
+    }
+
     saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
     updateFileExtensionPlaceholder();
     hideFileExtensionDropdown();
 }
 
 /**
- * 显示历史后缀下拉列表。
- * 前置条件：当前语言允许显示历史下拉（内部会二次检查）。
+ * 显示后缀下拉列表。
+ *
+ * 前置条件：当前语言的合法集合非空（受约束模式）。
+ * 自由模式调用此函数无副作用（直接隐藏）。
  */
-export function showFileExtensionDropdown(filterText) {
+export function showFileExtensionDropdown() {
     if (!DOM.fileExtensionInput) return;
-    const currentLang = EditorState.currentLanguage;
-    if (!LANGUAGE_SHOW_HISTORY_DROPDOWN[currentLang]) {
+    const currentLanguage = EditorState.currentLanguage;
+    const validList = LANGUAGE_VALID_EXTENSIONS[currentLanguage];
+    if (!Array.isArray(validList) || validList.length === 0) {
         hideFileExtensionDropdown();
         return;
     }
-    const filter = (typeof filterText === 'string') ? filterText : '';
-    renderFileExtensionDropdown(filter);
+    renderFileExtensionDropdown();
 }
 
 /**
- * 隐藏历史后缀下拉列表。
+ * 隐藏后缀下拉列表。
  */
 export function hideFileExtensionDropdown() {
     if (DOM.fileExtensionDropdown) {
@@ -602,29 +522,28 @@ export function hideFileExtensionDropdown() {
 // ==================== 后缀：提示文本 ====================
 
 /**
- * 更新输入框的 placeholder 与 title，使其反映当前语言的可用性。
+ * 更新输入框的 placeholder 与 title。
+ *
+ * 受约束模式（集合非空）：
+ *   · placeholder = 默认后缀（集合第 0 项）
+ *   · title = "当前语言可选后缀：py / pyw"
+ *
+ * 自由模式（集合为空）：
+ *   · placeholder = '后缀'
+ *   · title = '输入自定义后缀（不能使用其他语言的后缀）'
  */
 export function updateFileExtensionPlaceholder() {
     if (!DOM.fileExtensionInput) return;
-    const currentLang = EditorState.currentLanguage;
-    const autoExtension = AUTO_EXTENSION_BY_LANGUAGE[currentLang] || '';
-    const allowCustom = LANGUAGE_ALLOW_CUSTOM_EXTENSION[currentLang] === true;
-    const showHistory = LANGUAGE_SHOW_HISTORY_DROPDOWN[currentLang] === true;
+    const currentLanguage = EditorState.currentLanguage;
+    const validList = LANGUAGE_VALID_EXTENSIONS[currentLanguage];
+    const hasFixedCollection = Array.isArray(validList) && validList.length > 0;
 
-    if (!allowCustom) {
-        // JS / CSS / JV：后缀固定只读
-        DOM.fileExtensionInput.placeholder = autoExtension;
-        DOM.fileExtensionInput.title = '当前语言后缀固定为 .' + autoExtension;
-    } else if (currentLang === 'txt') {
-        // TXT：自由输入 + 历史下拉
-        DOM.fileExtensionInput.placeholder = '后缀';
-        DOM.fileExtensionInput.title = '输入自定义后缀（回车 / 失焦后记入历史；点击可选择历史后缀）';
+    if (hasFixedCollection) {
+        DOM.fileExtensionInput.placeholder = validList[0];
+        DOM.fileExtensionInput.title = '当前语言可选后缀：' + validList.join(' / ');
     } else {
-        // HTML / Python：默认值可修改；支持历史下拉
-        DOM.fileExtensionInput.placeholder = autoExtension;
-        DOM.fileExtensionInput.title = showHistory
-            ? '默认 .' + autoExtension + '（可修改；点击可选择历史后缀）'
-            : '默认 .' + autoExtension + '（可修改）';
+        DOM.fileExtensionInput.placeholder = '后缀';
+        DOM.fileExtensionInput.title = '输入自定义后缀（不能使用其他语言的后缀）';
     }
 }
 
@@ -633,7 +552,15 @@ export function updateFileExtensionPlaceholder() {
 /**
  * 初始化自定义文件后缀输入框。
  *
- * 幂等保护：重复调用直接返回。
+ * 关键步骤：
+ *   1. 从 localStorage 恢复 languageExtensionMap（结构容错）；
+ *   2. 兼容 v8.4.1 单一后缀键（迁移到 TXT）；
+ *   3. 全量校正 map 中的非法值（一次性清理）；
+ *   4. 补齐所有语言键（避免 undefined）；
+ *   5. 应用当前语言；
+ *   6. 绑定 input / change / focus / click / blur / keydown 事件；
+ *   7. 绑定全局 mousedown / keydown 事件（下拉关闭）；
+ *   8. 清理已废弃的 FILE_EXTENSION_HISTORY 键。
  */
 export function initializeFileExtensionInput() {
     if (!DOM.fileExtensionInput) return;
@@ -648,41 +575,69 @@ export function initializeFileExtensionInput() {
         EditorState.languageExtensionMap = {};
     }
 
-    // ---- 2. 兼容 v8.4.1：将单一后缀值迁移为 TXT 语言的初始值 ----
+    // ---- 2. 兼容 v8.4.1：单一后缀值迁移为 TXT 的初始值 ----
     let oldFileExtensionKeyExists = false;
     try {
         oldFileExtensionKeyExists = localStorage.getItem(STORAGE_KEYS.FILE_EXTENSION) !== null;
     } catch (readError) {
-        // localStorage 不可用时静默忽略（键视为不存在）
+        // localStorage 不可用时静默忽略
     }
     if (oldFileExtensionKeyExists) {
         const oldSingleExtension = loadFromLocalStorage(STORAGE_KEYS.FILE_EXTENSION, '');
         if (oldSingleExtension && !EditorState.languageExtensionMap.txt) {
             const sanitizedOld = sanitizeFileExtension(oldSingleExtension);
-            if (sanitizedOld) {
+            // 迁移时校验跨语言占用：若旧值恰是其他语言的保留后缀，
+            // 直接丢弃，避免污染 TXT 的记忆。
+            if (sanitizedOld && !isExtensionUsedByOtherLanguage('txt', sanitizedOld)) {
                 EditorState.languageExtensionMap.txt = sanitizedOld;
             }
         }
         try {
             localStorage.removeItem(STORAGE_KEYS.FILE_EXTENSION);
         } catch (removeError) {
-            // localStorage 不可用时静默忽略
+            // 静默
         }
     }
 
-    // ---- 3. 补齐所有语言 ----
-    const allLanguages = ['js', 'html', 'css', 'python', 'java', 'txt'];
-    for (let index = 0; index < allLanguages.length; index++) {
-        const lang = allLanguages[index];
-        if (EditorState.languageExtensionMap[lang] === undefined) {
-            EditorState.languageExtensionMap[lang] = AUTO_EXTENSION_BY_LANGUAGE[lang] || '';
+    // ---- 3. 全量校正已保存的 map（清理旧版遗留的非法值） ----
+    const allLanguageKeys = Object.keys(LANGUAGE_VALID_EXTENSIONS);
+    let mapWasCorrected = false;
+    for (let index = 0; index < allLanguageKeys.length; index++) {
+        const languageKey = allLanguageKeys[index];
+        const correctedValue = resolveExtensionForLanguage(languageKey);
+        if (EditorState.languageExtensionMap[languageKey] !== correctedValue) {
+            EditorState.languageExtensionMap[languageKey] = correctedValue;
+            mapWasCorrected = true;
         }
     }
+    // 补齐未定义的语言键
+    for (let index = 0; index < allLanguageKeys.length; index++) {
+        const languageKey = allLanguageKeys[index];
+        if (EditorState.languageExtensionMap[languageKey] === undefined) {
+            EditorState.languageExtensionMap[languageKey] = AUTO_EXTENSION_BY_LANGUAGE[languageKey] || '';
+            mapWasCorrected = true;
+        }
+    }
+    if (mapWasCorrected) {
+        saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
+    }
 
-    // ---- 4. 应用到输入框 ----
+    // ---- 4. 清理已废弃的 FILE_EXTENSION_HISTORY 键 ----
+    try {
+        if (localStorage.getItem(STORAGE_KEYS.FILE_EXTENSION_HISTORY) !== null) {
+            localStorage.removeItem(STORAGE_KEYS.FILE_EXTENSION_HISTORY);
+        }
+    } catch (cleanupError) {
+        // 静默
+    }
+
+    // ---- 5. 应用到当前语言 ----
     updateFileExtensionForLanguage(EditorState.currentLanguage);
 
-    // ---- 5. input 事件 ----
+    // ---- 6. input 事件 ----
+    // 说明：受约束语言 input 事件不触发（readOnly）；
+    //       TXT 自由输入模式下，input 仅净化显示，不写入 map；
+    //       真正的合法性校验在 change / Enter 时进行。
     DOM.fileExtensionInput.addEventListener('input', function() {
         if (isSanitizingFileExtension) return;
 
@@ -707,61 +662,33 @@ export function initializeFileExtensionInput() {
                 isSanitizingFileExtension = false;
             }
         }
-
-        // 更新 map
-        if (!EditorState.languageExtensionMap
-            || typeof EditorState.languageExtensionMap !== 'object') {
-            EditorState.languageExtensionMap = {};
-        }
-        EditorState.languageExtensionMap[EditorState.currentLanguage] = this.value;
-        saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
-
-        updateFileExtensionPlaceholder();
-
-        // 显示历史下拉
-        if (LANGUAGE_SHOW_HISTORY_DROPDOWN[EditorState.currentLanguage]) {
-            showFileExtensionDropdown(this.value);
-        }
+        // 注意：不在此处写入 languageExtensionMap，避免乐观写入非法值。
+        // 合法性判断与写入统一在 change / Enter 时执行。
     });
 
-    // ---- 6. change 事件：历史记录入口 ----
+    // ---- 7. change 事件：合法性校验入口 ----
     DOM.fileExtensionInput.addEventListener('change', function() {
         const sanitizedValue = sanitizeFileExtension(this.value);
         if (this.value !== sanitizedValue) {
             this.value = sanitizedValue;
         }
-        if (!EditorState.languageExtensionMap
-            || typeof EditorState.languageExtensionMap !== 'object') {
-            EditorState.languageExtensionMap = {};
-        }
-        EditorState.languageExtensionMap[EditorState.currentLanguage] = sanitizedValue;
-        saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
-
-        // 把后缀写入历史
-        if (LANGUAGE_SHOW_HISTORY_DROPDOWN[EditorState.currentLanguage] && sanitizedValue) {
-            addToFileExtensionHistory(sanitizedValue);
-        }
-        updateFileExtensionPlaceholder();
+        commitFileExtensionValue(sanitizedValue);
     });
 
-    // ---- 7. focus / click ----
+    // ---- 8. focus / click ----
     DOM.fileExtensionInput.addEventListener('focus', function() {
-        if (LANGUAGE_SHOW_HISTORY_DROPDOWN[EditorState.currentLanguage]) {
-            showFileExtensionDropdown();
-        }
+        showFileExtensionDropdown();
     });
     DOM.fileExtensionInput.addEventListener('click', function() {
-        if (LANGUAGE_SHOW_HISTORY_DROPDOWN[EditorState.currentLanguage]) {
-            showFileExtensionDropdown();
-        }
+        showFileExtensionDropdown();
     });
 
-    // ---- 8. blur ----
+    // ---- 9. blur ----
     DOM.fileExtensionInput.addEventListener('blur', function() {
         hideFileExtensionDropdown();
     });
 
-    // ---- 9. keydown ----
+    // ---- 10. keydown ----
     DOM.fileExtensionInput.addEventListener('keydown', function(event) {
         if (event.key === 'Escape') {
             event.preventDefault();
@@ -775,23 +702,13 @@ export function initializeFileExtensionInput() {
             if (this.value !== sanitizedValue) {
                 this.value = sanitizedValue;
             }
-            if (!EditorState.languageExtensionMap
-                || typeof EditorState.languageExtensionMap !== 'object') {
-                EditorState.languageExtensionMap = {};
-            }
-            EditorState.languageExtensionMap[EditorState.currentLanguage] = sanitizedValue;
-            saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
-
-            if (LANGUAGE_SHOW_HISTORY_DROPDOWN[EditorState.currentLanguage] && sanitizedValue) {
-                addToFileExtensionHistory(sanitizedValue);
-            }
-            updateFileExtensionPlaceholder();
+            commitFileExtensionValue(sanitizedValue);
             this.blur();
             return;
         }
     });
 
-    // ---- 10. 全局 mousedown ----
+    // ---- 11. 全局 mousedown（点击外部关闭下拉） ----
     document.addEventListener('mousedown', function(event) {
         if (!DOM.fileExtensionInput) return;
         const wrapperElement = document.getElementById('fileExtensionWrapper');
@@ -801,7 +718,7 @@ export function initializeFileExtensionInput() {
         }
     });
 
-    // ---- 11. 全局 keydown（Escape 关闭下拉） ----
+    // ---- 12. 全局 keydown（Escape 关闭下拉） ----
     document.addEventListener('keydown', function(event) {
         if (event.key === 'Escape') {
             if (DOM.fileExtensionDropdown && DOM.fileExtensionDropdown.style.display !== 'none') {
@@ -811,14 +728,52 @@ export function initializeFileExtensionInput() {
     });
 }
 
+/**
+ * 提交后缀值的统一入口（change / Enter 共用）。
+ *
+ * 逻辑：
+ *   · 若 value 合法 → 写入 languageExtensionMap，保持输入框显示；
+ *   · 若 value 非法 → 恢复输入框显示为记忆中的合法值，并 Toast 提示。
+ *
+ * 为什么非法时恢复而不是清空？
+ *   · 用户输入 py 被拒绝时，我们希望恢复到"上次有效值"而非空；
+ *   · 记忆中的合法值就是"上次有效值"，直接复用即可。
+ */
+function commitFileExtensionValue(value) {
+    const currentLanguage = EditorState.currentLanguage;
+
+    if (isExtensionAllowedForLanguage(currentLanguage, value)) {
+        // 合法：写入记忆
+        if (!EditorState.languageExtensionMap
+            || typeof EditorState.languageExtensionMap !== 'object') {
+            EditorState.languageExtensionMap = {};
+        }
+        EditorState.languageExtensionMap[currentLanguage] = value;
+        saveToLocalStorage(STORAGE_KEYS.LANGUAGE_EXTENSION_MAP, EditorState.languageExtensionMap);
+        updateFileExtensionPlaceholder();
+        return;
+    }
+
+    // 非法：恢复显示 + Toast 提示
+    if (value) {
+        if (isExtensionUsedByOtherLanguage(currentLanguage, value)) {
+            showToast('ℹ️ "' + value + '" 是其他语言的后缀，已恢复上次有效值', true);
+        } else {
+            showToast('ℹ️ "' + value + '" 不是有效的后缀，已恢复上次有效值', true);
+        }
+    }
+
+    const lastValidValue = EditorState.languageExtensionMap[currentLanguage] || '';
+    if (DOM.fileExtensionInput) {
+        DOM.fileExtensionInput.value = lastValidValue;
+    }
+    updateFileExtensionPlaceholder();
+}
+
 // ==================== 下载 ====================
 
 /**
  * 计算导出时实际使用的编码显示名。
- *
- * 'ansi' 语义上是"系统默认"，但实际编码取决于浏览器：
- *   · GBK 支持    → 实际为 GBK，显示 "ANSI (系统默认)"
- *   · GBK 不支持  → 回退 ASCII，显示 "ANSI (回退 ASCII)"
  */
 function resolveEncodingDisplayName(encoding) {
     if (encoding === 'ansi') {
@@ -835,17 +790,16 @@ function resolveEncodingDisplayName(encoding) {
  * 下载 / 保存文件。
  *
  * 编码决策：
- *   1. 用户显式选择的编码优先
- *   2. 当前编码为 'auto' 时按扩展名推荐编码
- *   3. 'gbk' 不支持时明确提示用户选择降级方案
- *   4. 'ansi' 不做硬预检（内部软回退），但会 info 提示
+ *   1. 用户显式选择的编码优先；
+ *   2. 当前编码为 'auto' 时按扩展名推荐编码；
+ *   3. 'gbk' 不支持时明确提示用户选择降级方案；
+ *   4. 'ansi' 不做硬预检（内部软回退），但会 info 提示。
  *
- * 保存路径（本次重构后）：
- *   1. 先尝试获取目录句柄（成功与否决定后续分支）
- *      · 用户取消目录选择 → 整个流程终止，不再 fallback 下载
- *      · 权限失效 / 其他错误 → 打印日志，继续走浏览器下载
- *   2. 只在真正开始写文件前 prompt 一次文件名
- *   3. 目录写入失败回退下载时复用同一份文件名，不重复 prompt
+ * 保存路径：
+ *   1. 先尝试获取目录句柄（成功与否决定后续分支）；
+ *   2. 用户取消目录选择 → 整个流程终止；
+ *   3. 目录写入失败 → 回退浏览器下载；
+ *   4. 只 prompt 一次文件名，两个分支共用。
  */
 async function handleDownloadClick() {
     const currentCode = DOM.codeEditor.value;
@@ -864,12 +818,11 @@ async function handleDownloadClick() {
         ? (MIME_TYPES[EditorState.currentLanguage] || 'text/plain')
         : 'text/plain';
 
-    // ---- 2. HTML / TXT / Python 语言把当前值作为历史写入 ----
-    if (LANGUAGE_SHOW_HISTORY_DROPDOWN[EditorState.currentLanguage] && fileExtension) {
-        addToFileExtensionHistory(fileExtension);
-    }
+    // 注：本次重构已废弃 addToFileExtensionHistory 调用。
+    //     后缀记忆仅由 languageExtensionMap 承担，
+    //     下载时不再向全局历史写入。
 
-    // ---- 3. 解析导出编码 ----
+    // ---- 2. 解析导出编码 ----
     let exportEncoding = EditorState.currentEncoding;
     if (exportEncoding === 'auto') {
         const normalizedExtension = fileExtension.toLowerCase();
@@ -878,7 +831,7 @@ async function handleDownloadClick() {
         showToast('当前为自动检测，导出使用 ' + resolveEncodingDisplayName(exportEncoding));
     }
 
-    // ---- 4. GBK 可用性预检 ----
+    // ---- 3. GBK 可用性预检 ----
     if (exportEncoding === 'gbk' && !isGBKSupported()) {
         const gbkErrorMessage = getGBKSupportError() || '当前浏览器不支持 GBK 编码';
         const fallbackToUtf8 = confirm(
@@ -893,12 +846,12 @@ async function handleDownloadClick() {
         showToast('已改用 UTF-8 编码下载');
     }
 
-    // ---- 4.1 'ansi' 回退提示 ----
+    // ---- 3.1 'ansi' 回退提示 ----
     if (exportEncoding === 'ansi' && !isGBKSupported()) {
         showToast('ℹ️ ANSI 回退为 ASCII（当前浏览器不支持 GBK）');
     }
 
-    // ---- 5. 编码为字节流 ----
+    // ---- 4. 编码为字节流 ----
     let encodedBytes;
     try {
         encodedBytes = encodeTextToBytes(currentCode, exportEncoding);
@@ -908,17 +861,16 @@ async function handleDownloadClick() {
         return;
     }
 
-    // ---- 6. 计算最终显示的编码名 ----
+    // ---- 5. 计算最终显示的编码名 ----
     const finalEncodingDisplayName = resolveEncodingDisplayName(exportEncoding);
 
-    // ---- 7. 尝试获取目录句柄（成功与否决定后续分支） ----
+    // ---- 6. 尝试获取目录句柄 ----
     let directoryHandle = null;
     if (window.showDirectoryPicker) {
         try {
             directoryHandle = await getOrCreateSaveDirectory();
         } catch (dirError) {
             if (dirError && dirError.name === 'AbortError') {
-                // 用户主动取消目录选择 → 终止整个保存流程
                 return;
             }
             if (dirError && dirError.name === 'NotAllowedError') {
@@ -935,7 +887,7 @@ async function handleDownloadClick() {
         }
     }
 
-    // ---- 8. 只 prompt 一次文件名，两个分支共用 ----
+    // ---- 7. 只 prompt 一次文件名 ----
     const lastFilename = loadFromLocalStorage(STORAGE_KEYS.LAST_DOWNLOAD_FILENAME, 'code');
     const userInputFilename = prompt(
         '请输入文件名（无需后缀，将自动使用 .' + fileExtension + '）:',
@@ -949,7 +901,7 @@ async function handleDownloadClick() {
     }
     const finalFilename = safeFilename + '.' + fileExtension;
 
-    // ---- 9. 优先走目录保存 ----
+    // ---- 8. 优先走目录保存 ----
     if (directoryHandle) {
         try {
             await writeFileToDirectory(directoryHandle, finalFilename, encodedBytes);
@@ -972,7 +924,7 @@ async function handleDownloadClick() {
         }
     }
 
-    // ---- 10. 回退到浏览器下载（复用同一份文件名） ----
+    // ---- 9. 回退到浏览器下载 ----
     const blob = new Blob([encodedBytes], { type: mimeType });
     const downloadUrl = URL.createObjectURL(blob);
     const downloadLink = document.createElement('a');
@@ -987,12 +939,6 @@ async function handleDownloadClick() {
 
 // ==================== 下载事件绑定 ====================
 
-/**
- * 绑定下载按钮。
- *
- * "更改保存位置" / "打开保存位置" 按钮由 directory-io.js 的
- * bindDirectoryIOEvents 负责绑定。
- */
 export function bindDownloadEvents() {
     DOM.btnDownload.addEventListener('click', handleDownloadClick);
 }

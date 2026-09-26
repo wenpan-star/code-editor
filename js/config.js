@@ -5,32 +5,37 @@
  * ============================================================================
  *
  * 【本次重构】
- *   新增 ENCODING_LONG_DESCRIPTIONS 常量。
+ *   1. 后缀系统从"预设 + 全局历史"重构为"权威合法集合"：
  *
- *   背景：
- *     ENCODING_DISPLAY_NAMES 中的 'ansi' 显示名是 "ANSI (系统默认)"。
- *     这是一个来自微软的历史术语，"系统默认"具体指什么编码，
- *     取决于操作系统与区域设置：
- *       · 简体中文 Windows → GBK（代码页 936）
- *       · 繁体中文 Windows → Big5（代码页 950）
- *       · 日文 Windows     → Shift-JIS（代码页 932）
- *       · 西欧 Windows     → Windows-1252
- *       · macOS / Linux    → 通常为 UTF-8
+ *      原模型的问题：
+ *        · LANGUAGE_PRESET_EXTENSIONS 只表达"预设候选"，
+ *          真正的下拉数据源还要合并 FILE_EXTENSION_HISTORY（全局）；
+ *        · FILE_EXTENSION_HISTORY 无语言隔离，
+ *          TXT 输入的 py 会污染 HTML / JS / CSS / Java 的下拉；
+ *        · 缺少"语言的合法后缀集合"这一权威概念，
+ *          导致"Python 下拉出现 bat / html"这类越界。
  *
- *     浏览器沙箱无法探测操作系统 ANSI 代码页，本编辑器在实现上
- *     做了务实取舍：优先 GBK，不支持时回退纯 ASCII。这对简体中文
- *     用户完全等价于"系统默认"，但对其他语言环境用户存在语义偏差。
+ *      新模型：
+ *        · LANGUAGE_VALID_EXTENSIONS 是唯一权威来源，
+ *          显式声明每种语言允许的后缀集合；
+ *        · 空数组（当前仅 TXT）= 自由输入模式，
+ *          由 file-io.js 的跨语言占用校验兜底；
+ *        · 废除 FILE_EXTENSION_HISTORY（仅保留存储键定义用于一次性清理）；
+ *        · AUTO_EXTENSION_BY_LANGUAGE 从 LANGUAGE_VALID_EXTENSIONS 派生，
+ *          消除两处漂移风险。
  *
- *   目的：
- *     把上述取舍显式化，让用户在 UI 中随时能看到每种编码的真实含义：
- *       · index.html 中编码下拉 option 的 title 属性；
- *       · encoding.js 中编码切换后 Toast 的详细说明；
- *       · file-io.js 中导入 / 导出时对实际使用编码的提示。
+ *   2. 删除的常量：
+ *      · LANGUAGE_PRESET_EXTENSIONS     —— 被 LANGUAGE_VALID_EXTENSIONS 取代
+ *      · LANGUAGE_ALLOW_CUSTOM_EXTENSION —— 由"集合是否为空"代替判断
+ *      · LANGUAGE_SHOW_HISTORY_DROPDOWN —— 同上
  *
- *   不改变 ENCODING_DISPLAY_NAMES 的现有值（状态栏 / 下拉可见文案
- *   保持简短），仅新增一份详细描述供悬停 / Toast 使用。
+ *   3. 保留的常量（行为不变）：
+ *      · LANGUAGE_EXTENSIONS  —— 下载时的兜底默认后缀
+ *      · STORAGE_KEYS.FILE_EXTENSION_HISTORY —— 保留定义，仅供清理
+ *      · LANGUAGE_DISPLAY_NAMES / EXTENSION_LANGUAGE_MAP /
+ *        VALID_TEXT_FILE_EXTENSION_REGEX 等
  *
- *   其余常量、存储键、语言定义完全保持原样。
+ *   4. 其余常量、存储键、编码定义、主题定义完全保持原样。
  * ============================================================================
  */
 
@@ -66,12 +71,13 @@ export const CONFIG = Object.freeze({
 
     // ---- 自定义文件后缀 ----
     FILE_EXTENSION_MAX_LENGTH: 12,
+    // 保留常量为兼容性使用；新模型不再限制历史数量，
+    // 但设置校验器与旧数据清理仍可能引用此常量。
     FILE_EXTENSION_HISTORY_MAX: 20,
 
     // ---- 设置导出 / 导入 ----
     SETTINGS_FILE_MAX_SIZE: 5 * 1024 * 1024,
     SETTINGS_RELOAD_DELAY_MS: 1500,
-    // skipBeforeUnload 标志的有效期（毫秒）。
     SETTINGS_SKIP_BEFOREUNLOAD_TTL_MS: 10000
 });
 
@@ -99,6 +105,10 @@ export const STORAGE_KEYS = Object.freeze({
     REPLACE_FIND_MANUAL_HEIGHT: 'replace-find-manual-height',
     REPLACE_WITH_MANUAL_HEIGHT: 'replace-with-manual-height',
     FILE_EXTENSION: 'editor-file-extension-v8',
+    // FILE_EXTENSION_HISTORY 保留键定义：
+    //   · 新版后缀系统不再使用此键；
+    //   · file-io.js 初始化时将其移除（一次性清理）；
+    //   · settings-io.js 不再导出此键，也不再校验。
     FILE_EXTENSION_HISTORY: 'editor-file-extension-history-v8',
     LANGUAGE_EXTENSION_MAP: 'editor-language-extension-map-v9'
 });
@@ -107,9 +117,10 @@ export const STORAGE_KEYS = Object.freeze({
  * 设置导出 / 导入的键全集。
  *
  * 有意排除的键：
- *   · CODE_CACHE     —— 编辑器代码内容，由自动保存机制独立管理
- *   · DIRTY_FLAG     —— 运行时脏标记，页面重启后即清
- *   · FILE_EXTENSION —— v8.4.1 历史遗留键，仅在初始化时迁移后清理
+ *   · CODE_CACHE              —— 编辑器代码内容，由自动保存机制独立管理
+ *   · DIRTY_FLAG              —— 运行时脏标记，页面重启后即清
+ *   · FILE_EXTENSION          —— v8.4.1 历史遗留键，仅在初始化时迁移后清理
+ *   · FILE_EXTENSION_HISTORY  —— 新版后缀系统已废弃，仅初始化时清理
  */
 export const SETTINGS_EXPORTABLE_KEYS = Object.freeze([
     STORAGE_KEYS.THEME,
@@ -132,7 +143,6 @@ export const SETTINGS_EXPORTABLE_KEYS = Object.freeze([
     STORAGE_KEYS.REPLACE_FIND_MANUAL_HEIGHT,
     STORAGE_KEYS.REPLACE_WITH_MANUAL_HEIGHT,
     STORAGE_KEYS.LAST_DOWNLOAD_FILENAME,
-    STORAGE_KEYS.FILE_EXTENSION_HISTORY,
     STORAGE_KEYS.LANGUAGE_EXTENSION_MAP
 ]);
 
@@ -159,6 +169,15 @@ export const LANGUAGE_DISPLAY_NAMES = Object.freeze({
     txt: 'Plain Text'
 });
 
+/**
+ * 下载时的兜底默认后缀。
+ *
+ * 与 AUTO_EXTENSION_BY_LANGUAGE 的差异：
+ *   · AUTO_EXTENSION_BY_LANGUAGE 描述"输入框默认显示什么"，
+ *     TXT 模式下为空（用户自行输入）；
+ *   · LANGUAGE_EXTENSIONS 描述"下载时若输入框为空用什么兜底"，
+ *     TXT 模式下用 'txt'。
+ */
 export const LANGUAGE_EXTENSIONS = Object.freeze({
     js: 'js',
     html: 'html',
@@ -168,71 +187,54 @@ export const LANGUAGE_EXTENSIONS = Object.freeze({
     txt: 'txt'
 });
 
-export const AUTO_EXTENSION_BY_LANGUAGE = Object.freeze({
-    js: 'js',
-    html: 'html',
-    css: 'css',
-    python: 'py',
-    java: 'java',
-    txt: ''
-});
-
 /**
- * 每语言是否允许用户自定义后缀。
+ * 每种语言的合法后缀集合（唯一权威来源）。
  *
- * Python 允许在 py / pyw 之间切换，也允许自由输入其他后缀。
- */
-export const LANGUAGE_ALLOW_CUSTOM_EXTENSION = Object.freeze({
-    js: false,
-    html: true,
-    css: false,
-    python: true,
-    java: false,
-    txt: true
-});
-
-/**
- * 每语言是否显示历史后缀下拉。
- */
-export const LANGUAGE_SHOW_HISTORY_DROPDOWN = Object.freeze({
-    js: false,
-    html: true,
-    css: false,
-    python: true,
-    java: false,
-    txt: true
-});
-
-/**
- * 每语言在下拉中「预设」的候选后缀。
+ * 语义：
+ *   · 非空数组 → 受约束模式：输入框 readOnly，下拉仅显示此集合；
+ *   · 空数组   → 自由模式：输入框可编辑，但禁止输入被其他语言占用的后缀。
  *
- * Python 预设 ['py', 'pyw']：
- *   · .py  —— 常规源码
- *   · .pyw —— Windows GUI 程序（用 pythonw.exe 运行，不弹控制台）
+ * 边界情况：
+ *   · 集合顺序有意义，第 0 项是切换语言时的默认后缀；
+ *   · 'txt' 空集合是当前唯一的自由模式；
+ *   · 若未来某语言也需自由模式，将其设为 [] 即可，无需改逻辑。
+ *
+ * 与 EXTENSION_LANGUAGE_MAP 的区别：
+ *   · EXTENSION_LANGUAGE_MAP 解决"导入文件用什么语言高亮"；
+ *   · LANGUAGE_VALID_EXTENSIONS 解决"这种语言可以导出为哪些后缀"。
+ *   两者不能互相推导，因为存在"高亮借用"（如 .json → js、.md → html）。
  */
-export const LANGUAGE_PRESET_EXTENSIONS = Object.freeze({
-    js: [],
-    html: [],
-    css: [],
-    python: ['py', 'pyw'],
-    java: [],
-    txt: []
+export const LANGUAGE_VALID_EXTENSIONS = Object.freeze({
+    js: Object.freeze(['js', 'mjs', 'cjs']),
+    html: Object.freeze(['html', 'htm']),
+    css: Object.freeze(['css']),
+    python: Object.freeze(['py', 'pyw']),
+    java: Object.freeze(['java']),
+    txt: Object.freeze([])
 });
+
+/**
+ * 每语言切换时的默认后缀（从 LANGUAGE_VALID_EXTENSIONS 派生）。
+ *
+ * 派生规则：
+ *   · 集合非空 → 取第 0 项；
+ *   · 集合为空（TXT） → 空字符串（由用户自定义）。
+ *
+ * 派生而非硬编码，保证"合法集合变了、默认值也同步变"。
+ */
+export const AUTO_EXTENSION_BY_LANGUAGE = (function deriveAutoExtensionMap() {
+    const derivedMap = {};
+    const languageKeys = Object.keys(LANGUAGE_VALID_EXTENSIONS);
+    for (let index = 0; index < languageKeys.length; index++) {
+        const languageKey = languageKeys[index];
+        const validList = LANGUAGE_VALID_EXTENSIONS[languageKey];
+        derivedMap[languageKey] = validList.length > 0 ? validList[0] : '';
+    }
+    return Object.freeze(derivedMap);
+})();
 
 /**
  * 编码显示名（简短，用于状态栏 / 下拉可见文案）。
- *
- * 6 种编码的语义：
- *   · 'auto'          —— 自动检测（导入时按 BOM / 扩展名 / UTF-8 有效性判定）
- *   · 'utf-8'         —— 现代跨平台首选
- *   · 'utf-8-bom'     —— UTF-8 + 3 字节 BOM（Windows 记事本兼容）
- *   · 'ansi'          —— 系统默认 ANSI：简中 Windows 上即 GBK；
- *                        GBK 不可用时回退 ASCII（保底不崩溃）
- *   · 'gbk'           —— 明确指定 GBK；不支持时硬报错，由调用方提示
- *   · 'ascii'         —— 纯 ASCII：非 ASCII 字符替换为 '?'
- *
- * 注意：'ansi' 显示名保持 "ANSI (系统默认)" 简短形式，
- *       详细语义见下方的 ENCODING_LONG_DESCRIPTIONS。
  */
 export const ENCODING_DISPLAY_NAMES = Object.freeze({
     'auto': '自动检测',
@@ -244,18 +246,7 @@ export const ENCODING_DISPLAY_NAMES = Object.freeze({
 });
 
 /**
- * 编码详细描述（长文案，用于：
- *   · index.html 编码下拉 option 的 title 属性；
- *   · encoding.js 编码切换后 Toast 的详细说明；
- *   · 将来可能出现的帮助面板 / 悬停提示。
- *
- * 每一句都说明"这个编码在当前环境下的实际行为"，避免用户
- * 把"系统默认"理解成当前系统的真实代码页。
- *
- * 措辞原则：
- *   · 不承诺超出实现能力的语义（例如 ANSI 无法真实探测系统代码页）；
- *   · 明确失败行为（GBK 不支持时硬报错 / ANSI 不支持时回退 ASCII）；
- *   · 说明字符串来源（RFC 标准 / 微软历史术语 / 中国国家标准）。
+ * 编码详细描述（长文案，用于下拉 option 的 title 属性）。
  */
 export const ENCODING_LONG_DESCRIPTIONS = Object.freeze({
     'auto':
@@ -282,18 +273,7 @@ export const ENCODING_LONG_DESCRIPTIONS = Object.freeze({
 
 /**
  * 扩展名 → 默认保存编码。
- *
  * 仅在"当前编码为 auto"时生效，用户显式选择编码时不覆盖。
- *
- * 映射依据：
- *   · .py / .spec / .md / .json / .html / .htm —— UTF-8
- *     Python 3 官方推荐 UTF-8；.spec 常为 PyInstaller 配置；
- *     .md / .json / .html 是跨平台 Web / 文档格式，UTF-8 是现代默认。
- *   · .bat / .cmd —— ANSI
- *     Windows 记事本"另存为 ANSI"在简体中文系统即 GBK。
- *     用 UTF-8 保存的 .bat 在 cmd.exe 中执行时中文会乱码。
- *     选择 'ansi' 而非 'gbk' 的语义优势：明确表达"用系统默认"，
- *     在非简中环境下自动回退，符合用户直觉。
  */
 export const EXTENSION_DEFAULT_ENCODING = Object.freeze({
     'py': 'utf-8',
@@ -388,16 +368,13 @@ public class Main {
 在 TXT 模式下：
   · 无语法高亮
   · 无 Java 运行支持
-  · 后缀可自由输入（会出现在下拉历史中）
+  · 后缀可自由输入（但不能是其他语言的后缀）
 
 Hello, World!`
 });
 
 /**
  * 主题循环顺序。
- *
- * ui.js 的 cycleTheme 按此顺序切换：
- *   dark → light → ink → cream → dark → ...
  */
 export const THEME_SEQUENCE = Object.freeze(['dark', 'light', 'ink', 'cream']);
 
@@ -410,6 +387,15 @@ export const MIME_TYPES = Object.freeze({
     txt: 'text/plain'
 });
 
+/**
+ * 扩展名 → 语言（用于导入时的语言识别 / 高亮选择）。
+ *
+ * 语义说明：
+ *   · 本映射用于"导入这个文件用什么语言高亮"，不是"这种语言可以导出为哪些后缀"；
+ *   · 存在"高亮借用"（.json → js、.md → html、.bat → txt），
+ *     这些后缀不会出现在对应语言的 LANGUAGE_VALID_EXTENSIONS 中；
+ *   · 两套数据互不干扰，职责严格分离。
+ */
 export const EXTENSION_LANGUAGE_MAP = Object.freeze({
     js: 'js',
     ts: 'js',
