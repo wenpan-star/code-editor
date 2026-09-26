@@ -4,29 +4,33 @@
  * config.js — 常量、默认值、语言与编码定义
  * ============================================================================
  *
- * 集中管理应用常量与默认值，无 DOM 依赖、无副作用。
+ * 【本次重构】
+ *   新增 ENCODING_LONG_DESCRIPTIONS 常量。
  *
- * 【本次更新】
- *   移除 THEME_ICONS 常量。
+ *   背景：
+ *     ENCODING_DISPLAY_NAMES 中的 'ansi' 显示名是 "ANSI (系统默认)"。
+ *     这是一个来自微软的历史术语，"系统默认"具体指什么编码，
+ *     取决于操作系统与区域设置：
+ *       · 简体中文 Windows → GBK（代码页 936）
+ *       · 繁体中文 Windows → Big5（代码页 950）
+ *       · 日文 Windows     → Shift-JIS（代码页 932）
+ *       · 西欧 Windows     → Windows-1252
+ *       · macOS / Linux    → 通常为 UTF-8
  *
- *   原 THEME_ICONS 将四个主题映射到 Emoji（☀️ / 🌙 / 🌊 / 🧁），
- *   由 ui.js 的 setTheme 通过 DOM.btnTheme.textContent = THEME_ICONS[theme]
- *   更新主题按钮。
+ *     浏览器沙箱无法探测操作系统 ANSI 代码页，本编辑器在实现上
+ *     做了务实取舍：优先 GBK，不支持时回退纯 ASCII。这对简体中文
+ *     用户完全等价于"系统默认"，但对其他语言环境用户存在语义偏差。
  *
- *   本次 UI 美化将主题按钮从 Emoji 文本升级为 4 个内联 SVG：
- *     · 太阳（dark）
- *     · 月亮（light）
- *     · 波浪（ink）
- *     · 蛋糕（cream）
- *   由 CSS 通过 html[data-theme="..."] 属性选择器控制显示哪一个。
- *   JS 只需切换 documentElement 上的 data-theme 属性，无需操作图标内容。
+ *   目的：
+ *     把上述取舍显式化，让用户在 UI 中随时能看到每种编码的真实含义：
+ *       · index.html 中编码下拉 option 的 title 属性；
+ *       · encoding.js 中编码切换后 Toast 的详细说明；
+ *       · file-io.js 中导入 / 导出时对实际使用编码的提示。
  *
- *   ui.js 已同步移除对 THEME_ICONS 的 import；
- *   本文件移除该常量定义，保持配置模块与运行时无死代码引用。
+ *   不改变 ENCODING_DISPLAY_NAMES 的现有值（状态栏 / 下拉可见文案
+ *   保持简短），仅新增一份详细描述供悬停 / Toast 使用。
  *
- * 【保留】
- *   · THEME_SEQUENCE —— 主题循环顺序（ui.js 的 cycleTheme 仍在使用）
- *   · 其余常量不变
+ *   其余常量、存储键、语言定义完全保持原样。
  * ============================================================================
  */
 
@@ -68,11 +72,6 @@ export const CONFIG = Object.freeze({
     SETTINGS_FILE_MAX_SIZE: 5 * 1024 * 1024,
     SETTINGS_RELOAD_DELAY_MS: 1500,
     // skipBeforeUnload 标志的有效期（毫秒）。
-    // 设置导入成功后由 settings-io.js 同时置位布尔标志与过期时间戳
-    // （Date.now() + TTL），ui.js 的 beforeunload 处理器据此判断是否放行。
-    // TTL 远大于 SETTINGS_RELOAD_DELAY_MS，保证 location.reload() 有充足
-    // 窗口；若 reload() 因某种原因未执行，标志也会在 TTL 后自动失效，
-    // 避免永久抑制未保存代码提示。
     SETTINGS_SKIP_BEFOREUNLOAD_TTL_MS: 10000
 });
 
@@ -111,9 +110,6 @@ export const STORAGE_KEYS = Object.freeze({
  *   · CODE_CACHE     —— 编辑器代码内容，由自动保存机制独立管理
  *   · DIRTY_FLAG     —— 运行时脏标记，页面重启后即清
  *   · FILE_EXTENSION —— v8.4.1 历史遗留键，仅在初始化时迁移后清理
- *
- * 新增持久化键时，请同步追加到本列表，并在 settings-io.js 的
- * SETTINGS_VALUE_VALIDATORS 中补充相应校验规则。
  */
 export const SETTINGS_EXPORTABLE_KEYS = Object.freeze([
     STORAGE_KEYS.THEME,
@@ -184,8 +180,7 @@ export const AUTO_EXTENSION_BY_LANGUAGE = Object.freeze({
 /**
  * 每语言是否允许用户自定义后缀。
  *
- * Python 由 false 改为 true —— 允许在 py / pyw 之间切换，
- * 也允许自由输入其他后缀（例如 .pyt 等个人约定）。
+ * Python 允许在 py / pyw 之间切换，也允许自由输入其他后缀。
  */
 export const LANGUAGE_ALLOW_CUSTOM_EXTENSION = Object.freeze({
     js: false,
@@ -198,8 +193,6 @@ export const LANGUAGE_ALLOW_CUSTOM_EXTENSION = Object.freeze({
 
 /**
  * 每语言是否显示历史后缀下拉。
- *
- * Python 由 false 改为 true —— 显示下拉，允许一键切换 py / pyw。
  */
 export const LANGUAGE_SHOW_HISTORY_DROPDOWN = Object.freeze({
     js: false,
@@ -213,14 +206,9 @@ export const LANGUAGE_SHOW_HISTORY_DROPDOWN = Object.freeze({
 /**
  * 每语言在下拉中「预设」的候选后缀。
  *
- * 下拉渲染时会把预设候选项与历史记录合并（预设优先，去重后展示）。
- * 目的：让用户首次进入某语言时就能看到可选值，无需先手动输入一次。
- *
- * 说明：
- *   · Python 预设 ['py', 'pyw']，两者都是标准 Python 源码后缀：
- *       - .py  —— 常规源码
- *       - .pyw —— Windows GUI 程序（用 pythonw.exe 运行，不弹控制台）
- *   · 其他语言暂不预设（后续如有需要，加到此即可，无需改 file-io.js）
+ * Python 预设 ['py', 'pyw']：
+ *   · .py  —— 常规源码
+ *   · .pyw —— Windows GUI 程序（用 pythonw.exe 运行，不弹控制台）
  */
 export const LANGUAGE_PRESET_EXTENSIONS = Object.freeze({
     js: [],
@@ -232,7 +220,7 @@ export const LANGUAGE_PRESET_EXTENSIONS = Object.freeze({
 });
 
 /**
- * 编码显示名。
+ * 编码显示名（简短，用于状态栏 / 下拉可见文案）。
  *
  * 6 种编码的语义：
  *   · 'auto'          —— 自动检测（导入时按 BOM / 扩展名 / UTF-8 有效性判定）
@@ -242,6 +230,9 @@ export const LANGUAGE_PRESET_EXTENSIONS = Object.freeze({
  *                        GBK 不可用时回退 ASCII（保底不崩溃）
  *   · 'gbk'           —— 明确指定 GBK；不支持时硬报错，由调用方提示
  *   · 'ascii'         —— 纯 ASCII：非 ASCII 字符替换为 '?'
+ *
+ * 注意：'ansi' 显示名保持 "ANSI (系统默认)" 简短形式，
+ *       详细语义见下方的 ENCODING_LONG_DESCRIPTIONS。
  */
 export const ENCODING_DISPLAY_NAMES = Object.freeze({
     'auto': '自动检测',
@@ -250,6 +241,43 @@ export const ENCODING_DISPLAY_NAMES = Object.freeze({
     'ansi': 'ANSI (系统默认)',
     'gbk': 'GBK (中文 ANSI)',
     'ascii': '纯 ASCII'
+});
+
+/**
+ * 编码详细描述（长文案，用于：
+ *   · index.html 编码下拉 option 的 title 属性；
+ *   · encoding.js 编码切换后 Toast 的详细说明；
+ *   · 将来可能出现的帮助面板 / 悬停提示。
+ *
+ * 每一句都说明"这个编码在当前环境下的实际行为"，避免用户
+ * 把"系统默认"理解成当前系统的真实代码页。
+ *
+ * 措辞原则：
+ *   · 不承诺超出实现能力的语义（例如 ANSI 无法真实探测系统代码页）；
+ *   · 明确失败行为（GBK 不支持时硬报错 / ANSI 不支持时回退 ASCII）；
+ *   · 说明字符串来源（RFC 标准 / 微软历史术语 / 中国国家标准）。
+ */
+export const ENCODING_LONG_DESCRIPTIONS = Object.freeze({
+    'auto':
+        '导入时按 BOM、扩展名、UTF-8 有效性自动检测；' +
+        '导出时按文件扩展名推荐（.bat/.cmd 使用 ANSI，其他使用 UTF-8）',
+    'utf-8':
+        '现代跨平台首选，符合 RFC 3629 标准；' +
+        '几乎所有现代编辑器与操作系统默认使用',
+    'utf-8-bom':
+        'UTF-8 + 3 字节 BOM（EF BB BF），' +
+        '兼容 Windows 记事本等要求 BOM 的场景',
+    'ansi':
+        '微软历史术语，指"操作系统默认代码页"；' +
+        '本编辑器实现策略：简体中文 Windows 上等价 GBK；' +
+        '浏览器不支持 GBK 时回退纯 ASCII（非 ASCII 字符替换为 ?）',
+    'gbk':
+        '中国国家标准 GBK（GB2312 的扩展），' +
+        '覆盖中日韩汉字与全角标点；' +
+        '当前浏览器不支持 GBK 时硬报错，由调用方提示用户改用其他编码',
+    'ascii':
+        '纯 ASCII（ANSI X3.4 标准），仅支持 0x00-0x7F；' +
+        '非 ASCII 字符（中文、全角标点、BMP 外字符）一律替换为 ?'
 });
 
 /**
@@ -266,9 +294,6 @@ export const ENCODING_DISPLAY_NAMES = Object.freeze({
  *     用 UTF-8 保存的 .bat 在 cmd.exe 中执行时中文会乱码。
  *     选择 'ansi' 而非 'gbk' 的语义优势：明确表达"用系统默认"，
  *     在非简中环境下自动回退，符合用户直觉。
- *
- * .pyw 未单独配置，会走 handleDownloadClick 的 || 'utf-8' 兜底，
- * 与 .py 保持一致（UTF-8）。
  */
 export const EXTENSION_DEFAULT_ENCODING = Object.freeze({
     'py': 'utf-8',
@@ -373,9 +398,6 @@ Hello, World!`
  *
  * ui.js 的 cycleTheme 按此顺序切换：
  *   dark → light → ink → cream → dark → ...
- *
- * 主题图标（太阳 / 月亮 / 波浪 / 蛋糕）由 CSS 通过
- * html[data-theme="..."] 属性选择器控制显示，无对应的 JS 常量。
  */
 export const THEME_SEQUENCE = Object.freeze(['dark', 'light', 'ink', 'cream']);
 

@@ -4,30 +4,23 @@
  * directory-io.js — 目录 / 保存位置管理（独立模块）
  * ============================================================================
  *
- * 【本次更新】
- *   仅在文件首行补充 // filename: js/directory-io.js 标注，与项目约定统一。
- *   内容逻辑保持不变。
+ * 【本次重构】
+ *   1. openSaveLocation 增加二次确认：
+ *      原实现在用户选择不同目录时直接更新保存位置。
+ *      但"打开保存位置"的语义是"查看当前目录"，不是"更改保存位置"，
+ *      用户可能误改。
  *
- * 本模块职责：
- *   1. showDirectoryPicker 封装（自动使用上次保存目录作为 startIn）
- *   2. 保存位置的获取 / 更改 / 打开
- *   3. 目录句柄权限校验与失效处理
- *   4. "打开保存位置"功能（浏览器沙箱内最佳近似）
+ *      新行为：
+ *        · 用户选择相同目录 → 无副作用；
+ *        · 用户选择不同目录 → confirm 二次确认，
+ *          用户确认后才更新保存位置；
+ *        · 用户取消确认 → 保持现状，不写 IndexedDB。
  *
- * 【为什么独立成模块】
- *   file-io.js 负责"文件内容 I/O"（读写文本、编码转换、拖拽、后缀），
- *   本模块负责"目录生命周期"（选择、记忆、打开、权限），两者职责正交。
+ *   2. Picker 封装保留自动 startIn 与一次重试逻辑。
  *
- * 【为什么"打开保存位置"不真正打开系统文件管理器】
- *   Chrome / Edge / Firefox 出于安全考虑，禁止 JS 唤醒 OS 级文件管理器
- *   （window.open('file:///...') 被 CORS 拦截）。本模块的最佳近似方案：
- *     用已保存的目录句柄作为 startIn 打开 showDirectoryPicker，
- *     用户可在原生对话框中"看到"当前目录及其内容。
- *   若用户选择了不同目录，等同于"更改保存位置"。
- *
- * 依赖：
- *   - dom.js / toast.js
- *   - storage.js（目录句柄的底层持久化与状态查询）
+ *   3. 保留全部原有导出接口与行为：
+ *      getOrCreateSaveDirectory / changeSaveDirectory / openSaveLocation /
+ *      bindDirectoryIOEvents。
  * ============================================================================
  */
 
@@ -116,7 +109,7 @@ async function isSameDirectory(handleA, handleB) {
  *   因为此三态均需要用户重新选择目录，行为一致。
  *
  * 异常语义：
- *   · 用户取消选择 → 抛 AbortError（调用方据此走下载兜底）
+ *   · 用户取消选择 → 抛 AbortError（调用方据此终止保存）
  *   · 其他错误     → 原样抛出
  *
  * @returns {Promise<FileSystemDirectoryHandle>}
@@ -163,7 +156,7 @@ export async function changeSaveDirectory() {
  * 本函数的最佳可行方案：
  *   · 用已保存的目录句柄作为 startIn 打开 showDirectoryPicker
  *   · 用户可在原生对话框中"看到"当前保存目录及其内容
- *   · 若用户选择了不同的目录，则更新保存位置（等价于"更改保存位置"）
+ *   · 若用户选择了不同的目录 → 二次确认后再更新保存位置
  *   · 若用户取消或选择相同目录，保持现状
  *
  * 与"更改保存位置"的区别：
@@ -209,8 +202,18 @@ export async function openSaveLocation() {
 
         const sameDirectory = await isSameDirectory(pickedHandle, currentHandle);
         if (!sameDirectory) {
-            await saveDirectoryHandle(pickedHandle);
-            showToast('📁 保存位置已更新为 "' + pickedHandle.name + '"');
+            // 用户选择了不同目录：二次确认后再更新保存位置。
+            // "打开保存位置"语义是"查看"，不应静默更改保存位置。
+            const shouldChangeSaveLocation = confirm(
+                '检测到您选择了其他目录："' + pickedHandle.name + '"。\n\n' +
+                '是否将该目录设为新的保存位置？\n\n' +
+                '点击"确定"：更新保存位置\n' +
+                '点击"取消"：仅查看，不更改保存位置'
+            );
+            if (shouldChangeSaveLocation) {
+                await saveDirectoryHandle(pickedHandle);
+                showToast('📁 保存位置已更新为 "' + pickedHandle.name + '"');
+            }
         }
     } catch (openError) {
         // 用户主动取消：无副作用

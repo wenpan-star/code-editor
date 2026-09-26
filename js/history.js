@@ -4,21 +4,29 @@
  * history.js — 撤销/重做历史管理器
  * ============================================================================
  *
- * 【本次更新】
- *   1. 修复 setLargeFileMode 中 currentIndex 与 history 数组错位（B5）：
- *      原实现在从数组头部 shift 时，仅当 currentIndex > 0 才自减，
- *      导致 currentIndex === 0 场景下索引指向错误条目。
- *      现改为无条件自减并钳制到 0。
+ * 【本次重构】
+ *   修复 pushState / endBatch 历史栈溢出时 currentIndex 与数组错位（B5 完整修复）。
  *
- *   2. 激活 pushState 的 force 参数语义：
- *      原实现声明了 force 参数但从未使用（shouldForce 赋值后未引用），
- *      属于死代码。现让 force === true 时跳过"状态相同则忽略"判断，
- *      强制把当前状态写入历史栈。
- *      典型用途：需要为某个操作设置显式历史锚点。
+ * 【根因】
+ *   原实现在 history.push(newState) 之后判断长度是否超限：
+ *     · 若超限，则 shift() 移除头部，并执行
+ *         currentIndex = Math.max(0, currentIndex - 1);
+ *     · 但 push 后新状态位于数组末尾，shift 后其索引已经是
+ *         this.history.length - 1；
+ *     · 把 currentIndex 递减 1 会让它指向"倒数第二个状态"，
+ *       撤销/重做会跳错位置。
+ *   该缺陷在历史记录超过 MAX_HISTORY (200) 后必现；
+ *   在 setLargeFileMode 收缩容量后同样会触发。
  *
- *   3. setPaused 保留作为公开 API：
- *      当前业务未调用，但保留给未来扩展（例如批量操作期间暂停历史）。
- *      与 setLargeFileMode 配合使用可覆盖多种历史管理场景。
+ * 【修复】
+ *   1. push 后若超限，只 shift 一次；随后无条件设置
+ *        this.currentIndex = this.history.length - 1;
+ *      保证 currentIndex 始终指向"最新入栈的状态"。
+ *   2. endBatch 采用完全相同的逻辑，避免两条入栈路径行为分叉。
+ *   3. setLargeFileMode 容量收缩后，同样以 history.length - 1
+ *      为新索引；空栈时置为 -1，符合"无历史"语义。
+ *   4. 保留 force 参数语义：force === true 时跳过"状态相同则忽略"判断。
+ *   5. 保留 setPaused 公开 API（当前业务未调用，供未来扩展）。
  * ============================================================================
  */
 
@@ -101,21 +109,21 @@ export class HistoryManager {
             }
         }
 
+        // 若当前不在栈顶（撤销后再次编辑），截断后续"未来"状态。
         if (this.currentIndex < this.history.length - 1) {
             this.history = this.history.slice(0, this.currentIndex + 1);
         }
 
         this.history.push(newState);
+
+        // 容量裁剪：仅 shift 一次。随后统一用 history.length - 1 作为新索引，
+        // 保证 currentIndex 永远指向"最新入栈的状态"，不会在多次裁剪后越界。
         const effectiveMax = this.isLargeFileMode ? this.largeFileMaxHistory : this.maxHistory;
         if (this.history.length > effectiveMax) {
             this.history.shift();
-            // 修复 B5：shift 后 currentIndex 必须无条件递减并钳制到 0。
-            this.currentIndex = Math.max(0, this.currentIndex - 1);
-            // 注意：此处不递增 currentIndex，因为 push 的是数组末尾，
-            // 而我们刚 shift 掉了头部，效果是 currentIndex 不变。
-        } else {
-            this.currentIndex++;
         }
+        this.currentIndex = this.history.length - 1;
+
         this.updateButtons();
     }
 
@@ -177,13 +185,14 @@ export class HistoryManager {
             }
 
             this.history.push(newState);
+
+            // 与 pushState 完全相同的裁剪与索引更新逻辑，避免两条入栈路径行为分叉。
             const effectiveMax = this.isLargeFileMode ? this.largeFileMaxHistory : this.maxHistory;
             if (this.history.length > effectiveMax) {
                 this.history.shift();
-                this.currentIndex = Math.max(0, this.currentIndex - 1);
-            } else {
-                this.currentIndex++;
             }
+            this.currentIndex = this.history.length - 1;
+
             this.updateButtons();
         }
     }
@@ -191,9 +200,8 @@ export class HistoryManager {
     /**
      * 切换大文件模式。
      *
-     * 修复 B5：
-     *   原实现仅在 currentIndex > 0 时递减，currentIndex === 0 场景下
-     *   会造成索引与数组错位。现无条件递减并钳制到 0。
+     * 容量收缩时逐次 shift，最终把 currentIndex 重置为 history.length - 1；
+     * 空栈时置为 -1，语义为"无历史可撤销/重做"。
      */
     setLargeFileMode(isLargeFile) {
         this.isLargeFileMode = isLargeFile;
@@ -201,10 +209,11 @@ export class HistoryManager {
             const effectiveMax = this.largeFileMaxHistory;
             while (this.history.length > effectiveMax) {
                 this.history.shift();
-                this.currentIndex = Math.max(0, this.currentIndex - 1);
             }
-            if (this.currentIndex < 0) {
-                this.currentIndex = 0;
+            if (this.history.length === 0) {
+                this.currentIndex = -1;
+            } else {
+                this.currentIndex = this.history.length - 1;
             }
         }
         this.updateButtons();

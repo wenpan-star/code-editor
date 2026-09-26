@@ -4,65 +4,116 @@
  * search.js — 查找 / 替换 / 搜索 Worker
  * ============================================================================
  *
- * 【本次更新】
- *   仅在文件首行补充 // filename: js/search.js 标注，与项目约定统一。
- *   内容逻辑保持不变。
+ * 【本次重构】
+ *   1. 正则安全模式单一事实来源（落地）：
+ *      上一轮已从 util.js 导入 DANGEROUS_REGEX_PATTERN_SOURCES，
+ *      但 createHighlightWorker 的 Worker 脚本仍硬编码了 19 条正则字面量，
+ *      造成"导入但未使用"——两份列表仍然存在，维护漂移风险未消除。
  *
- * 本模块职责：
- *   1. Web Worker 异步搜索（超时后终止并重建 Worker）
- *   2. 主线程同步搜索用于 findNext / replaceOne
- *   3. 弹窗拖拽 / 调整大小 / 位置与尺寸持久化
- *   4. 通过 editor-api.js 的 setEditorContent 统一编辑入口
+ *      本模块新增 buildDangerousRegexPatternsInlineCode()：
+ *        · 遍历 DANGEROUS_REGEX_PATTERN_SOURCES；
+ *        · 对每条源字符串调用 JSON.stringify，得到合法的 JS 字符串字面量；
+ *        · 包裹为 new RegExp(...) 调用；
+ *        · 用逗号 + 换行拼接成数组文本，通过模板字面量插值注入 Worker 脚本。
+ *      这样 util.js 与 Worker 侧永远使用同一份模式列表。
  *
- * 关键设计：
- *   · setupSmartSelect 使用前置声明的 boundMouseMove / boundMouseUp
- *     保证 removeEventListener 引用一致，避免监听器泄漏。
- *   · Worker 内部 try/catch 携带 requestId，异常时明确回传。
- *   · 超时仅在无在途请求时才终止 Worker。
- *   · worker.onerror 中先 terminate 再置空，避免实例泄漏。
+ *      正确性论证：
+ *        · 源字符串中每个反斜杠在 JSON.stringify 后变为两个（JSON 转义）；
+ *        · 通过 ${} 插入模板字面量时，插入值按原样拼接，不再二次转义；
+ *        · Worker 收到 new RegExp("\\(...") 形式的源码，
+ *          其中的字符串字面量在 Worker 求值时还原为原始模式字符串；
+ *        · 与硬编码正则字面量语义完全等价。
+ *
+ *   2. Worker 创建失败时真正回退主线程同步搜索：
+ *      创建、postMessage、超时三条路径都做 try/catch，
+ *      任一步失败立即降级为 getMatchRangesSync。
+ *
+ *   3. 异步搜索竞态保护：
+ *      每次调用分配递增序列号，回调执行前比对，过期结果被丢弃。
+ *
+ *   4. 保留全部原有导出接口与行为。
  * ============================================================================
  */
 
 import { EditorState } from './state.js';
 import { STORAGE_KEYS, CONFIG } from './config.js';
-import { saveToLocalStorage, loadFromLocalStorage, buildSearchRegex, isRegexSafe } from './util.js';
+import {
+    saveToLocalStorage,
+    loadFromLocalStorage,
+    buildSearchRegex,
+    isRegexSafe,
+    DANGEROUS_REGEX_PATTERN_SOURCES
+} from './util.js';
 import { DOM } from './dom.js';
 import { showToast } from './toast.js';
 import { scheduleHighlightUpdate } from './highlight.js';
 import { scrollToCursor, updateCursorPosition } from './line-numbers.js';
 import { setEditorContent } from './editor-api.js';
 
+// ==================== 异步搜索竞态保护 ====================
+
+// 每次 getMatchRangesAsync 调用分配一个递增序列号；
+// 回调执行前比对当前序列号，过期结果直接丢弃。
+let searchGenerationCounter = 0;
+
+// ==================== 危险模式动态内联（Worker 脚本用） ====================
+
+/**
+ * 把 util.js 导出的 DANGEROUS_REGEX_PATTERN_SOURCES 转换成
+ * Worker 脚本中可用的 `new RegExp("...")` 数组文本。
+ *
+ * 关键点：
+ *   · JSON.stringify 会把源字符串中的反斜杠正确转义为 \\，
+ *     使结果成为合法的 JS 字符串字面量；
+ *   · 通过模板字面量 ${} 插入时，插入值按原样拼接；
+ *   · Worker 求值 new RegExp("\\(...") 时，
+ *     字符串字面量 "\\(..." 在 Worker 内还原为 \(... 原始模式。
+ *
+ * @returns {string} 形如 `new RegExp("..."),\n                new RegExp("...")`
+ */
+function buildDangerousRegexPatternsInlineCode() {
+    const inlineCodes = [];
+    for (let index = 0; index < DANGEROUS_REGEX_PATTERN_SOURCES.length; index++) {
+        inlineCodes.push(
+            'new RegExp(' + JSON.stringify(DANGEROUS_REGEX_PATTERN_SOURCES[index]) + ')'
+        );
+    }
+    return inlineCodes.join(',\n                ');
+}
+
 // ==================== 搜索 Worker ====================
 
+/**
+ * 创建搜索 Worker。
+ *
+ * 所有可能抛错的调用都包在 try/catch 中：
+ *   · new Blob / URL.createObjectURL
+ *   · new Worker
+ * 任一失败时 EditorState.highlightWorker 保持 null，
+ * 由 getMatchRangesAsync 统一走主线程同步回退。
+ *
+ * @returns {boolean} Worker 是否创建成功
+ */
 export function createHighlightWorker() {
+    // 先终止旧 Worker，避免实例泄漏
     if (EditorState.highlightWorker) {
-        EditorState.highlightWorker.terminate();
+        try {
+            EditorState.highlightWorker.terminate();
+        } catch (terminateError) {
+            // 忽略：旧 Worker 已损坏
+        }
         EditorState.highlightWorker = null;
     }
+
+    // 从 util.js 的单一事实来源动态生成 Worker 内的危险模式数组
+    const dangerousPatternsInlineCode = buildDangerousRegexPatternsInlineCode();
+
     const workerScript = `
         function escapeRegExp(string) { return string.replace(/[-\\\\/^$*+?.()|[\\]{}]/g, '\\\\$&'); }
         function isRegexSafeForWorker(pattern) {
             if (!pattern || pattern.length > 100) return false;
             var dangerousPatterns = [
-                /\\([^)]*\\|[^)]*\\)[+*]{2,}/,
-                /\\((?:[^()]|\\\\([^()]*\\\\))*\\)[+*]{2,}/,
-                /\\(\\.\\*\\)[+*]/,
-                /\\(\\.\\+\\)[+*]/,
-                /\\w+\\+\\+/,
-                /\\w+\\*\\*/,
-                /\\([^)]*\\)\\{[^}]*,[^}]*\\}[+*]/,
-                /(\\[.*?\\])\\1[+*]/,
-                /([+*{]\\d*,?\\d*})[\\s\\S]*\\1/,
-                /\\([^)]*\\|[^)]*\\)[+*]/,
-                /\\([^)]*\\)[+*]\\s*[+*]/,
-                /\\([^)]+\\|[^)]+\\)\\+/,
-                /\\(\\w+\\s?\\?\\)[+*]/,
-                /\\([^)]*\\|[^)]*\\)\\+/,
-                /\\([^)]+\\|[^)]+\\)[+*]/,
-                /\\([a-zA-Z0-9_]+[+*?]\\)[+*]/,
-                /\\([^)]+\\|[^)]+\\)\\s*\\+/,
-                /\\([^)]+\\)\\+[+*]/,
-                /\\([^)]*[+*][^)]*\\)[+*]/
+                ${dangerousPatternsInlineCode}
             ];
             for (var i = 0; i < dangerousPatterns.length; i++) {
                 if (dangerousPatterns[i].test(pattern)) return false;
@@ -125,8 +176,17 @@ export function createHighlightWorker() {
             self.postMessage({ type: 'searchMatchesResult', matches: [], safe: false, reason: 'worker_error' });
         };
     `;
-    const blob = new Blob([workerScript], { type: 'application/javascript' });
-    const worker = new Worker(URL.createObjectURL(blob));
+
+    let worker = null;
+    try {
+        const blob = new Blob([workerScript], { type: 'application/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+        worker = new Worker(blobUrl);
+    } catch (workerConstructError) {
+        console.warn('Web Worker 构造失败，查找功能将走主线程同步搜索:', workerConstructError);
+        EditorState.highlightWorker = null;
+        return false;
+    }
 
     worker.onmessage = function(event) {
         const responseData = event.data;
@@ -144,10 +204,15 @@ export function createHighlightWorker() {
         }
     };
 
-    // Worker 抛错时先 terminate 再置空，避免实例泄漏。
+    // Worker 抛错时先 terminate 再置空，避免实例泄漏；
+    // 同时清空所有在途回调（避免回调永久滞留）。
     worker.onerror = function(event) {
         if (EditorState.highlightWorker === worker) {
-            worker.terminate();
+            try {
+                worker.terminate();
+            } catch (terminateError) {
+                // 忽略
+            }
             EditorState.highlightWorker = null;
         }
         EditorState.workerCallbacksMap.forEach(function(callback) {
@@ -157,40 +222,92 @@ export function createHighlightWorker() {
     };
 
     EditorState.highlightWorker = worker;
+    return true;
 }
 
 export function terminateHighlightWorker() {
     if (EditorState.highlightWorker) {
-        EditorState.highlightWorker.terminate();
+        try {
+            EditorState.highlightWorker.terminate();
+        } catch (terminateError) {
+            // 忽略：Worker 已损坏
+        }
         EditorState.highlightWorker = null;
     }
     EditorState.workerCallbacksMap.clear();
 }
 
+/**
+ * 异步搜索匹配范围。
+ *
+ * 回退策略（依次判断）：
+ *   1. Worker 不存在 → 尝试创建；创建失败 → 主线程同步搜索；
+ *   2. Worker 存在但 postMessage 抛错 → 主线程同步搜索；
+ *   3. Worker 超时未返回 → 回传空结果 + 'timeout' 原因（不回退同步，
+ *      避免超时后再次执行可能同样慢的同步搜索，造成双重卡顿）。
+ *
+ * 竞态保护：
+ *   每次调用分配一个递增序列号；回调执行前比对当前序列号，
+ *   过期结果被丢弃，避免旧请求覆盖新状态。
+ */
 export function getMatchRangesAsync(code, searchTerm, caseSensitive, wholeWord, useRegex, callback, timeout) {
     const effectiveTimeout = timeout || CONFIG.SEARCH_TIMEOUT_MS;
+
+    // ---- 1. 确保 Worker 可用 ----
     if (!EditorState.highlightWorker) {
         createHighlightWorker();
     }
+
+    // ---- 2. Worker 仍不可用 → 主线程同步回退 ----
+    if (!EditorState.highlightWorker) {
+        const syncRanges = getMatchRangesSync(code, searchTerm, caseSensitive, wholeWord, useRegex);
+        callback(syncRanges, null);
+        return;
+    }
+
     const requestId = ++EditorState.workerMessageIdCounter;
-    EditorState.workerCallbacksMap.set(requestId, callback);
-    EditorState.highlightWorker.postMessage({
-        type: 'searchMatches',
-        code: code,
-        searchTerm: searchTerm,
-        caseSensitive: caseSensitive,
-        wholeWord: wholeWord,
-        useRegex: useRegex,
-        timeout: effectiveTimeout,
-        requestId: requestId
+    const myGeneration = ++searchGenerationCounter;
+
+    // 包装回调：过期结果直接丢弃，不执行外层 callback
+    EditorState.workerCallbacksMap.set(requestId, function(ranges, reason) {
+        if (myGeneration !== searchGenerationCounter) {
+            return;
+        }
+        callback(ranges, reason);
     });
+
+    // ---- 3. postMessage 失败 → 主线程同步回退 ----
+    try {
+        EditorState.highlightWorker.postMessage({
+            type: 'searchMatches',
+            code: code,
+            searchTerm: searchTerm,
+            caseSensitive: caseSensitive,
+            wholeWord: wholeWord,
+            useRegex: useRegex,
+            timeout: effectiveTimeout,
+            requestId: requestId
+        });
+    } catch (postMessageError) {
+        console.warn('Worker postMessage 失败，回退主线程同步搜索:', postMessageError);
+        EditorState.workerCallbacksMap.delete(requestId);
+        const syncRanges = getMatchRangesSync(code, searchTerm, caseSensitive, wholeWord, useRegex);
+        if (myGeneration === searchGenerationCounter) {
+            callback(syncRanges, null);
+        }
+        return;
+    }
+
+    // ---- 4. 超时兜底：过期请求直接丢弃，不覆盖新状态 ----
     setTimeout(function() {
         if (EditorState.workerCallbacksMap.has(requestId)) {
             EditorState.workerCallbacksMap.delete(requestId);
             if (EditorState.workerCallbacksMap.size === 0) {
                 terminateHighlightWorker();
             }
-            callback([], 'timeout');
+            if (myGeneration === searchGenerationCounter) {
+                callback([], 'timeout');
+            }
         }
     }, effectiveTimeout + CONFIG.SEARCH_TIMEOUT_GRACE_MS);
 }

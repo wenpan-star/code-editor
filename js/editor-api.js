@@ -4,17 +4,29 @@
  * editor-api.js — 统一编辑入口 / 状态协调层
  * ============================================================================
  *
- * 【本次更新】
- *   状态栏自动保存指示器去掉 Emoji（💾 / ⚠️），改为纯文字。
- *   颜色反馈由 DOM.autoSaveStatus.style.color 承担：
- *     · 成功 → var(--green)
- *     · 失败 → var(--red)
- *   与状态栏其他信息块（纯文字 + 状态点）保持一致。
+ * 【本次重构】
+ *   1. 自动保存状态颜色恢复（P2）：
+ *      原实现在成功时把 autoSaveStatus 置为绿色，2 秒后只改文字，
+ *      不恢复颜色。失败变红后若后续成功，颜色可能残留。
  *
- * 【保留】
- *   - A1：flushPendingHistoryIfNeeded 在撤销/重做前强制落盘打字历史定时器
- *   - v8.5.5 switchLanguage 回调注入机制
- *   - handleUndo / handleRedo 不重复调用 fullUpdate
+ *      新行为：
+ *        · 定义辅助函数 restoreAutoSaveStatusToDefault，
+ *          把文字重置为 '自动保存'、颜色重置为 var(--text-secondary)；
+ *        · 成功路径：文字 '已自动保存' + 绿色，2 秒后恢复默认；
+ *        · 失败路径：文字 '保存失败' + 红色，不自动恢复（保留警示）；
+ *        · 本地降级：文字 '已保存(本地)' + 黄色 var(--warning)；
+ *        · 大文件未保存：文字 '大文件未保存' + 红色。
+ *
+ *   2. 保留全部原有导出接口与行为：
+ *      setUpdateMatchCountCallback / setUpdateFileExtensionCallback /
+ *      setEditorContent / executeCodeModification / fullUpdate /
+ *      debouncedUpdate / updateRunButtonState / toggleClearButton /
+ *      markModified / clearModifiedMark / setOriginalCode /
+ *      updateFileNameDisplay / triggerAutoSave / saveImmediately /
+ *      emergencySave / loadSavedCode / handleUndo / handleRedo /
+ *      updateUndoRedoState / switchLanguage。
+ *
+ *   3. A1 修复保留：flushPendingHistoryIfNeeded 在撤销/重做前强制落盘。
  * ============================================================================
  */
 
@@ -53,15 +65,62 @@ export function setUpdateMatchCountCallback(callback) {
 
 /**
  * main.js 注入 updateFileExtensionForLanguage（来自 file-io.js）。
- * 注入后，任何调用 switchLanguage 的路径都会自动同步后缀框，例如：
- *   - ui.js 语言下拉 change 事件
- *   - file-io.js 的 loadFileIntoEditor 导入文件后检测到语言
- *   - 未来新增的其他调用路径
- * 这样"切换语言"成为一个原子操作，其所有副作用（高亮更新、
- * 运行按钮状态、后缀联动）都由 switchLanguage 统一负责。
+ * 注入后，任何调用 switchLanguage 的路径都会自动同步后缀框。
  */
 export function setUpdateFileExtensionCallback(callback) {
     updateFileExtensionCallback = callback;
+}
+
+// ==================== 自动保存状态显示 ====================
+
+// 自动保存状态默认文字与颜色。
+// 成功短暂提示后，恢复到此默认状态。
+const AUTO_SAVE_DEFAULT_TEXT = '自动保存';
+const AUTO_SAVE_DEFAULT_COLOR = 'var(--text-secondary)';
+const AUTO_SAVE_SUCCESS_COLOR = 'var(--green)';
+const AUTO_SAVE_WARNING_COLOR = 'var(--warning)';
+const AUTO_SAVE_ERROR_COLOR = 'var(--red)';
+const AUTO_SAVE_SUCCESS_DISPLAY_MS = 2000;
+
+/**
+ * 恢复自动保存状态为默认文字与颜色。
+ * 由成功提示的 2 秒定时器调用。
+ */
+function restoreAutoSaveStatusToDefault() {
+    if (!DOM.autoSaveStatus) return;
+    DOM.autoSaveStatus.textContent = AUTO_SAVE_DEFAULT_TEXT;
+    DOM.autoSaveStatus.style.color = AUTO_SAVE_DEFAULT_COLOR;
+}
+
+/**
+ * 显示自动保存成功状态（绿色），并在 AUTO_SAVE_SUCCESS_DISPLAY_MS
+ * 后恢复默认状态。
+ */
+function showAutoSaveSuccessStatus(text) {
+    if (!DOM.autoSaveStatus) return;
+    DOM.autoSaveStatus.textContent = text;
+    DOM.autoSaveStatus.style.color = AUTO_SAVE_SUCCESS_COLOR;
+    setTimeout(restoreAutoSaveStatusToDefault, AUTO_SAVE_SUCCESS_DISPLAY_MS);
+}
+
+/**
+ * 显示自动保存失败状态（红色），不自动恢复。
+ * 由下次成功自动保存覆盖。
+ */
+function showAutoSaveFailureStatus(text) {
+    if (!DOM.autoSaveStatus) return;
+    DOM.autoSaveStatus.textContent = text;
+    DOM.autoSaveStatus.style.color = AUTO_SAVE_ERROR_COLOR;
+}
+
+/**
+ * 显示自动保存降级状态（黄色），不自动恢复。
+ * 用于 IndexedDB 失败但 localStorage 成功的场景。
+ */
+function showAutoSaveDegradedStatus(text) {
+    if (!DOM.autoSaveStatus) return;
+    DOM.autoSaveStatus.textContent = text;
+    DOM.autoSaveStatus.style.color = AUTO_SAVE_WARNING_COLOR;
 }
 
 // ==================== 待处理历史定时器 ====================
@@ -71,9 +130,6 @@ export function setUpdateFileExtensionCallback(callback) {
  * 立即触发一次 pushState 把当前编辑状态写入历史栈。
  *
  * 目的：让"用户输入后立刻按 Ctrl+Z"能够撤销本次输入。
- *
- * 由 handleUndo / handleRedo 内部调用，
- * 也被 setEditorContent 间接通过"清空定时器"的方式防止重复快照。
  */
 function flushPendingHistoryIfNeeded() {
     if (EditorState.typingHistoryDebounceTimer !== null) {
@@ -249,13 +305,13 @@ export function updateFileNameDisplay(filename) {
 /**
  * 触发自动保存（延迟执行，防抖）。
  *
- * 状态栏反馈使用纯文字 + 颜色：
- *   · 成功 → '已自动保存' + var(--green)，2 秒后恢复 '自动保存'
- *   · IndexedDB 失败但 localStorage 成功 → '已保存(本地)'
- *   · 完全失败 → '保存失败' + var(--red)
- *   · 大文件模式未保存 → '大文件未保存' + var(--red)
+ * 状态栏反馈：
+ *   · 成功 → '已自动保存' + 绿色，2 秒后恢复默认文字与颜色；
+ *   · IndexedDB 失败但 localStorage 成功 → '已保存(本地)' + 黄色；
+ *   · 完全失败 → '保存失败' + 红色；
+ *   · 大文件模式未保存 → '大文件未保存' + 红色。
  *
- * 已去除原实现中的 💾 / ⚠️ Emoji，与状态栏整体风格统一。
+ * 所有状态显示函数集中在本模块顶部，避免颜色与文字分散在多个分支。
  */
 export function triggerAutoSave() {
     if (EditorState.autoSaveTimer) clearTimeout(EditorState.autoSaveTimer);
@@ -271,24 +327,18 @@ export function triggerAutoSave() {
                 saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, currentCode);
             }
             clearModifiedMark();
-            DOM.autoSaveStatus.textContent = '已自动保存';
-            DOM.autoSaveStatus.style.color = 'var(--green)';
-            setTimeout(function() {
-                DOM.autoSaveStatus.textContent = '自动保存';
-            }, 2000);
+            showAutoSaveSuccessStatus('已自动保存');
         } catch (error) {
             console.warn('自动保存失败', error);
             if (!EditorState.largeFileActive) {
                 try {
                     saveToLocalStorage(STORAGE_KEYS.CODE_CACHE, currentCode);
-                    DOM.autoSaveStatus.textContent = '已保存(本地)';
+                    showAutoSaveDegradedStatus('已保存(本地)');
                 } catch (localError) {
-                    DOM.autoSaveStatus.textContent = '保存失败';
-                    DOM.autoSaveStatus.style.color = 'var(--red)';
+                    showAutoSaveFailureStatus('保存失败');
                 }
             } else {
-                DOM.autoSaveStatus.textContent = '大文件未保存';
-                DOM.autoSaveStatus.style.color = 'var(--red)';
+                showAutoSaveFailureStatus('大文件未保存');
             }
             if (currentCode !== EditorState.originalCode) markModified();
         }
@@ -424,19 +474,15 @@ export function updateUndoRedoState() {
  *   6. 更新运行按钮状态；
  *   7. 非 Java 语言时关闭输出面板；
  *   8. 触发后缀联动回调（若已注入）—— 保证后缀框自动跟随语言。
- *
- * 由 ui.js 的语言下拉 change 事件、file-io.js 的文件导入路径调用。
  */
 export function switchLanguage(language) {
     EditorState.currentLanguage = language;
     saveToLocalStorage(STORAGE_KEYS.LANGUAGE, language);
 
-    // 语言选择为单个下拉框，直接同步 value。
     if (DOM.langSelect) {
         DOM.langSelect.value = language;
     }
 
-    // 状态栏显示全称（如 JavaScript）。
     DOM.langDisplay.textContent = LANGUAGE_DISPLAY_NAMES[language] || language;
 
     scheduleHighlightUpdate();
@@ -445,12 +491,6 @@ export function switchLanguage(language) {
         closeOutputPanel();
     }
 
-    // 触发后缀联动回调（若已注入）。
-    // 支持所有调用路径自动同步后缀框：
-    //   - ui.js 语言下拉切换
-    //   - file-io.js 导入文件检测到语言
-    //   - 未来新增的其他调用路径
-    // 回调可能抛出异常（例如输入框尚未挂载），已做防御性 try / catch。
     if (updateFileExtensionCallback) {
         try {
             updateFileExtensionCallback(language);

@@ -4,26 +4,26 @@
  * main.js — 启动引导 + 初始化
  * ============================================================================
  *
- * 【本次更新】
- *   仅在文件首行补充 // filename: js/main.js 标注，与项目约定统一。
- *   内容逻辑保持不变。
+ * 【本次重构】
+ *   1. 折叠范围恢复增加校验（P1）：
+ *      原实现直接 loadFromLocalStorage(FOLDED_RANGES, [])，
+ *      未校验行号越界、块结构失效、数据篡改。
  *
- * 职责：
- *   1. 创建 HistoryManager 并注入回调
- *   2. 打开 IndexedDB 自动保存数据库
- *   3. 加载所有持久化设置
- *   4. 尝试恢复上次编辑内容
- *   5. 创建 Shadow DOM 高亮层
- *   6. 创建搜索 Worker（用于查找替换）
- *   7. 绑定所有事件
- *   8. 注入循环依赖回调（updateMatchCountDebounced）
- *   9. 注入后缀联动回调（updateFileExtensionForLanguage）
- *   10. 设置高亮调度器
- *   11. 初始化自定义文件后缀输入框
- *   12. 初始化设置导出 / 导入模块
- *   13. 初始化目录 / 保存位置管理模块
- *   14. 后台预热 GBK 映射表
- *   15. 聚焦编辑器
+ *      新流程：
+ *        · 先加载原始折叠范围；
+ *        · 用当前编辑器代码 split('\n') 得到 lines；
+ *        · 调用 folding.js 的 validateFoldedRanges(lines, rawRanges)；
+ *        · 用过滤后的合法范围替换 EditorState.foldedRanges；
+ *        · 自增 foldedRangesVersion，使折叠行集合缓存正确失效。
+ *
+ *   2. 保留全部原有初始化步骤与顺序：
+ *      HistoryManager / 回调注入 / IndexedDB / 设置加载 /
+ *      文件名显示 / 折叠范围恢复 / 高亮开关 / stdin /
+ *      内容恢复 / Worker / Shadow DOM / 查找替换恢复 /
+ *      全量刷新 / 语言状态 / 后缀输入框 / 运行按钮 /
+ *      事件绑定 / GBK 预热 / 聚焦。
+ *
+ *   3. 从 folding.js 的 import 中新增 validateFoldedRanges。
  * ============================================================================
  */
 
@@ -76,7 +76,10 @@ import {
     bindEncodingSelectEvents
 } from './encoding.js';
 import { setupEditorEvents } from './editor.js';
-import { setupLineNumberClickHandler } from './folding.js';
+import {
+    setupLineNumberClickHandler,
+    validateFoldedRanges
+} from './folding.js';
 import {
     bindImportEvents,
     bindDragAndDropEvents,
@@ -238,8 +241,15 @@ async function initialize() {
     // ---- 6. 文件名显示 ----
     updateFileNameDisplay('在线代码编辑器');
 
-    // ---- 7. 折叠范围恢复 ----
-    EditorState.foldedRanges = loadFromLocalStorage(STORAGE_KEYS.FOLDED_RANGES, []);
+    // ---- 7. 折叠范围恢复 + 校验 ----
+    // 校验目的：避免历史折叠范围行号越界、块结构失效、数据篡改
+    // 导致行号列渲染异常或折叠标记出现在错误位置。
+    const rawFoldedRanges = loadFromLocalStorage(STORAGE_KEYS.FOLDED_RANGES, []);
+    const currentLinesForFoldValidation = DOM.codeEditor.value.split('\n');
+    EditorState.foldedRanges = validateFoldedRanges(
+        currentLinesForFoldValidation,
+        rawFoldedRanges
+    );
     // 自增版本号，让折叠行集合缓存正确失效
     EditorState.foldedRangesVersion++;
     setupLineNumberClickHandler();
@@ -274,10 +284,25 @@ async function initialize() {
     setOriginalCode(DOM.codeEditor.value);
     historyManagerInstance.pushState(DOM.codeEditor);
 
+    // ---- 10.1 内容变化后再次校验折叠范围 ----
+    // 恢复编辑内容后行数可能与初始不同，第二次校验保证折叠范围
+    // 与最终实际内容严格一致。
+    const restoredLinesForFoldValidation = DOM.codeEditor.value.split('\n');
+    EditorState.foldedRanges = validateFoldedRanges(
+        restoredLinesForFoldValidation,
+        EditorState.foldedRanges
+    );
+    EditorState.foldedRangesVersion++;
+    if (EditorState.foldedRanges.length !== rawFoldedRanges.length) {
+        // 有失效项被过滤：把清理后的结果写回存储，避免下次启动重复过滤
+        saveToLocalStorage(STORAGE_KEYS.FOLDED_RANGES, EditorState.foldedRanges);
+    }
+
     // ---- 11. 创建搜索 Worker ----
     try {
         createHighlightWorker();
     } catch (workerError) {
+        // createHighlightWorker 内部已做防御；此处仅兜底
         console.warn('Web Worker 创建失败，将使用主线程搜索', workerError);
     }
 
@@ -336,7 +361,7 @@ async function initialize() {
     updateUndoRedoState();
 
     console.log(
-        '%c🚀 专业版编辑器 v' + CONFIG.APP_VERSION + ' 已就绪（撤销/折叠修复 + 编码 + 打开保存位置）',
+        '%c🚀 专业版编辑器 v' + CONFIG.APP_VERSION + ' 已就绪',
         'color:#3fb950;font-weight:bold;'
     );
 }

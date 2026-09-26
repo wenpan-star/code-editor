@@ -4,29 +4,26 @@
  * settings-io.js — 设置导出 / 导入
  * ============================================================================
  *
- * 【本次更新】
- *   仅在文件首行补充 // filename: js/settings-io.js 标注，与项目约定统一。
- *   内容逻辑保持不变。
+ * 【本次重构】
+ *   1. confirmOverwriteSettings 中的未保存代码提示文案改进（P2）：
+ *      原提示："未保存的代码可能丢失。建议先按 Ctrl+S 保存。"
+ *      与本项目的双层自动保存机制不符——代码已自动保存到
+ *      IndexedDB / localStorage，页面重载后会有恢复提示。
  *
- * 一键将编辑器所有持久化设置导出为 JSON 文件，或从 JSON 文件恢复。
+ *      新提示明确区分"自动保存"与"明确保存"两种语义：
+ *        · 自动保存的内容会在页面重载后提示恢复；
+ *        · 但自动保存不是"明确保存"，仍建议先按 Ctrl+S。
  *
- * 导入成功后置位 EditorState.skipBeforeUnload 双字段（布尔 + 过期时间戳），
- * 让 ui.js 的 beforeunload 处理器在 TTL 窗口内放行 location.reload()，
- * 避免"用户已同意 → 又弹原生确认框"的二次确认体验问题。
+ *   2. 保留全部原有导出接口与行为：
+ *      exportAllSettings / importAllSettingsFromFile / setupSettingsIOEvents。
  *
- * 导出覆盖范围（全部来源于 localStorage）：
- *   · 主题 / 字体大小 / 缩进（尺寸与字符）
- *   · 语言 / 编码 / Java 版本
- *   · 自动换行 / 高亮开关 / 折叠范围
- *   · 查找替换弹窗位置 / 尺寸 / textarea 手工高度
- *   · 查找替换输入内容与选项（大小写 / 全词 / 正则）
- *   · 每语言后缀映射 / 历史后缀列表 / 下载文件名默认值
- *   · stdin 缓存内容
+ *   3. 保留 SETTINGS_VALUE_VALIDATORS 全部校验规则：
+ *      枚举白名单 / 数值范围 / 结构校验 / 数组校验 / 字符串长度。
  *
- * 有意不包含：
- *   · 编辑器代码内容（CODE_CACHE / IndexedDB）——由自动保存机制独立管理
- *   · DIRTY_FLAG —— 运行时状态，页面重启后即清
- *   · 目录句柄（FileSystemDirectoryHandle 无法 JSON 序列化）
+ *   4. 保留 skipBeforeUnload 双字段（布尔 + 过期时间戳）写入逻辑。
+ *
+ *   5. 保留 UTF-8 BOM 剥离、_meta 校验、逐项写入回读、
+ *      Toast 汇总、幂等保护、键盘导航、外部点击关闭。
  * ============================================================================
  */
 
@@ -135,8 +132,6 @@ const SETTINGS_VALUE_VALIDATORS = {
     [STORAGE_KEYS.HIGHLIGHT_ENABLED]: function(value) {
         return typeof value === 'boolean';
     },
-    // 白名单移除 'windows-1252'，新增 'ansi' / 'gbk' / 'ascii'
-    // 旧版设置文件若包含 'windows-1252'，会被本校验器拒绝 → skippedKeys
     [STORAGE_KEYS.ENCODING]: function(value) {
         return typeof value === 'string'
             && ['auto', 'utf-8', 'utf-8-bom', 'ansi', 'gbk', 'ascii'].indexOf(value) !== -1;
@@ -157,13 +152,13 @@ const SETTINGS_VALUE_VALIDATORS = {
         return true;
     },
     [STORAGE_KEYS.STDIN_CACHE]: function(value) {
-        return typeof value === 'string';
+        return typeof value === 'string' && value.length <= 500000;
     },
     [STORAGE_KEYS.REPLACE_FIND]: function(value) {
-        return typeof value === 'string';
+        return typeof value === 'string' && value.length <= 100000;
     },
     [STORAGE_KEYS.REPLACE_WITH]: function(value) {
-        return typeof value === 'string';
+        return typeof value === 'string' && value.length <= 100000;
     },
     [STORAGE_KEYS.REPLACE_CASE_SENSITIVE]: function(value) {
         return typeof value === 'boolean';
@@ -397,6 +392,11 @@ function countMatchedSettingsKeys(importedData) {
 /**
  * 覆盖确认 + 未保存代码提醒。
  * 返回 true 表示用户同意继续，false 表示中止。
+ *
+ * 【本次重构】未保存代码提示文案更准确：
+ *   原提示"未保存的代码可能丢失"与本项目的双层自动保存机制不符。
+ *   自动保存的内容会在页面重载后提示恢复，因此不能说"可能丢失"。
+ *   但自动保存 ≠ 明确保存，仍建议用户按 Ctrl+S。
  */
 function confirmOverwriteSettings(totalMatchedCount) {
     const overwriteConfirmed = confirm(
@@ -407,9 +407,11 @@ function confirmOverwriteSettings(totalMatchedCount) {
 
     if (EditorState.codeModified) {
         const continueDespiteUnsaved = confirm(
-            '当前编辑器有未保存的代码更改。\n' +
-            '导入设置会刷新页面，未保存的代码可能丢失。\n' +
-            '建议先按 Ctrl+S 保存。是否继续导入？'
+            '当前编辑器有未明确保存的更改（自动保存已记录到本地）。\n' +
+            '导入设置会刷新页面：\n' +
+            '  · 自动保存的内容会在页面重载后提示恢复；\n' +
+            '  · 但自动保存不是"明确保存"，建议先按 Ctrl+S。\n' +
+            '是否继续导入？'
         );
         if (!continueDespiteUnsaved) return false;
     }
@@ -543,8 +545,6 @@ export function importAllSettingsFromFile(selectedFile) {
         // 用户已在 confirmOverwriteSettings 中明确同意丢弃未保存代码。
         // 同时置位布尔标志与过期时间戳，让 ui.js 的 beforeunload 处理器在
         // TTL 窗口内放行 location.reload()，避免浏览器原生二次确认框。
-        // 双字段模式保证即使 reload() 因某种原因未执行，标志也会在 TTL
-        // 之后自动失效，不会永久抑制未保存代码提示。
         EditorState.skipBeforeUnload = true;
         EditorState.skipBeforeUnloadExpiresAt =
             Date.now() + CONFIG.SETTINGS_SKIP_BEFOREUNLOAD_TTL_MS;

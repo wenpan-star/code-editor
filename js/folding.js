@@ -4,32 +4,34 @@
  * folding.js — 代码折叠
  * ============================================================================
  *
- * 【本次更新】
- *   1. 修复顶层块无法折叠（A3）：移除 baseIndent === 0 提前返回。
+ * 【本次重构】
+ *   1. 新增 validateFoldedRanges(lines, foldedRanges) 导出函数：
+ *      原实现在 main.js 初始化时直接从 localStorage 恢复
+ *      EditorState.foldedRanges，未做任何校验。
  *
- *   2. 修复 A3 修复引入的新 bug（闭合行误判）：
- *      原"跳过所有空行找到第一个缩进 > baseIndent 的非空行"逻辑，
- *      会把闭合行（如 `}`）误判为折叠起点 —— 因为紧随其后的下一块
- *      的非空行缩进更深，被错误地当作该闭合行的"块内容"。
+ *      存在的风险：
+ *        · 行号越界：历史折叠范围指向的行已不存在；
+ *        · 结构变化：用户导入新文件后，旧折叠范围的 startLine
+ *          对应的行已不再是块起点；
+ *        · 语言切换：旧范围的语义在新语言下已无意义；
+ *        · 数据篡改：localStorage 被外部修改后可能导致渲染异常。
  *
- *      新逻辑采用"紧邻下一非空行缩进必须更深"的严格判定：
- *        · 跳过空行后取到紧邻的下一非空行
- *        · 若该行缩进 <= baseIndent，则当前行不是折叠起点
- *        · 只有"下一非空行缩进 > baseIndent"才视为块的开启行
- *      这样：
- *        · 顶层 function / class / def / <html> 仍可折叠 ✓
- *        · 闭合行 `}` / `)` / `]` 不再误判 ✓
- *        · 空块（如 `class Foo {}`）不产生折叠 ✓
+ *      校验规则：
+ *        · startLine / endLine 必须为有限非负整数；
+ *        · startLine < endLine；
+ *        · endLine < lines.length；
+ *        · 以 lines 重新调用 findFoldRange，若返回 null 则该范围失效；
+ *        · 若新范围与旧范围 startLine 不一致（块起点已变），也失效。
  *
- *   3. 折叠后高亮层/行号列错位（A2）的配套缓存已落地：
- *      getFoldedLinesSet 基于 EditorState.foldedRangesVersion 缓存。
+ *      返回：过滤后的合法折叠范围数组（保持原有字段结构）。
  *
- *   4. 折叠范围变更时统一自增 EditorState.foldedRangesVersion，
- *      供 line-numbers.js / highlight.js 的缓存失效判断使用。
+ *   2. 保留全部原有导出接口与行为：
+ *      getLineIndentLevel / findFoldRange / updateFoldedRangesInStorage /
+ *      setupLineNumberClickHandler / toggleFold / getFoldedLinesSet /
+ *      isLineHidden。
  *
- *   5. line-container-folded 类名已由 css/styles.css 提供视觉样式：
- *      折叠隐藏行的行号列会显示为略深的背景 + 半透明，
- *      让用户能直观感知"这块被折叠了"。
+ *   3. A3 修复保留：移除 baseIndent === 0 提前返回。
+ *   4. A3 引入的闭合行误判修复保留：紧邻下一非空行缩进必须更深。
  * ============================================================================
  */
 
@@ -74,22 +76,16 @@ export function findFoldRange(lines, startLineIndex) {
 
     const baseIndent = getLineIndentLevel(lines[startLineIndex]);
 
-    // ---- 关键修复：紧邻下一非空行必须缩进更深 ----
-    // 先跳过起始行之后的所有空行，定位到紧邻的下一非空行。
+    // ---- 紧邻下一非空行必须缩进更深 ----
     let foldStart = startLineIndex + 1;
     while (foldStart < lines.length && lines[foldStart].trim() === '') {
         foldStart++;
     }
     if (foldStart >= lines.length) return null;
 
-    // 若紧邻下一非空行缩进 <= baseIndent，则当前行不是块起点。
-    // 这一判定排除了：
-    //   · 闭合行（`}` 后跟同级 `if` / `function` 等）
-    //   · 单行语句（如 `a();` 后跟同级 `b();`）
-    //   · 空块（`class Foo {}` 后跟同级内容）
     if (getLineIndentLevel(lines[foldStart]) <= baseIndent) return null;
 
-    // ---- 计算块结束行（缩进 <= baseIndent 的第一个非空行，或文档末尾）----
+    // ---- 计算块结束行 ----
     let endLineIndex = foldStart + 1;
     while (endLineIndex < lines.length) {
         const currentIndent = getLineIndentLevel(lines[endLineIndex]);
@@ -98,6 +94,83 @@ export function findFoldRange(lines, startLineIndex) {
     }
 
     return { startLine: startLineIndex, endLine: endLineIndex - 1 };
+}
+
+// ==================== 折叠范围校验 ====================
+
+/**
+ * 校验并清理折叠范围数组。
+ *
+ * 校验规则：
+ *   1. startLine / endLine 必须为有限非负整数；
+ *   2. startLine < endLine；
+ *   3. endLine < lines.length（行号未越界）；
+ *   4. 以当前 lines 重新计算 findFoldRange，若返回 null 则该范围失效；
+ *   5. 若重新计算的 startLine 与原 startLine 不一致，也失效
+ *      （说明该行已不再是块起点）。
+ *
+ * 保留原有 foldedCount 字段（若存在）。
+ *
+ * @param {string[]} lines - 当前代码 split('\n') 的结果
+ * @param {Array} rawFoldedRanges - 待校验的原始折叠范围数组
+ * @returns {Array} 过滤后的合法折叠范围数组
+ */
+export function validateFoldedRanges(lines, rawFoldedRanges) {
+    if (!Array.isArray(rawFoldedRanges)) return [];
+    if (!Array.isArray(lines) || lines.length === 0) return [];
+
+    const validRanges = [];
+    const seenStartLines = new Set();
+
+    for (let index = 0; index < rawFoldedRanges.length; index++) {
+        const rawRange = rawFoldedRanges[index];
+        if (!rawRange || typeof rawRange !== 'object') continue;
+
+        const rawStartLine = rawRange.startLine;
+        const rawEndLine = rawRange.endLine;
+
+        // 1. 类型与有限性
+        if (typeof rawStartLine !== 'number' || !isFinite(rawStartLine)) continue;
+        if (typeof rawEndLine !== 'number' || !isFinite(rawEndLine)) continue;
+
+        // 2. 非负整数
+        if (rawStartLine < 0 || rawEndLine < 0) continue;
+        if (Math.floor(rawStartLine) !== rawStartLine) continue;
+        if (Math.floor(rawEndLine) !== rawEndLine) continue;
+
+        // 3. startLine < endLine
+        if (rawStartLine >= rawEndLine) continue;
+
+        // 4. 行号未越界
+        if (rawStartLine >= lines.length) continue;
+        if (rawEndLine >= lines.length) continue;
+
+        // 5. 去重（同一 startLine 只保留第一个）
+        if (seenStartLines.has(rawStartLine)) continue;
+
+        // 6. 结构有效性：以当前 lines 重新计算折叠范围
+        const recomputedRange = findFoldRange(lines, rawStartLine);
+        if (!recomputedRange) continue;
+
+        // 7. 重新计算的起始行必须与原起始行一致
+        if (recomputedRange.startLine !== rawStartLine) continue;
+
+        // 通过全部校验：使用重新计算的范围（保证 endLine 反映当前代码结构）
+        const validRange = {
+            startLine: recomputedRange.startLine,
+            endLine: recomputedRange.endLine,
+            foldedCount: recomputedRange.endLine - recomputedRange.startLine
+        };
+        validRanges.push(validRange);
+        seenStartLines.add(recomputedRange.startLine);
+    }
+
+    // 按 startLine 排序，保证顺序稳定
+    validRanges.sort(function(a, b) {
+        return a.startLine - b.startLine;
+    });
+
+    return validRanges;
 }
 
 // ==================== 持久化 ====================

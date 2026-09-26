@@ -10,16 +10,13 @@
     ================================================================================
      在线代码编辑器 · 专业版
 
-     【本次更新说明 — UI 美化】
-       1. 主题 / 设置 / 帮助按钮从 Emoji（☀️ ⚙️ ?）替换为 SVG 线稿图标，
-          与工具栏其他 12 个 SVG 图标风格统一。
-          主题按钮采用"4 图标轮显"方案：太阳 / 月亮 / 波浪 / 蛋糕，
-          由 CSS 通过 html[data-theme] 属性控制显示哪个，无需 JS 干预。
-       2. 状态栏去掉 Emoji（🔆 💾），改为纯文字 + 状态点。
-       3. 工具栏右侧按功能分为 6 个 .toolbar-group（组内 2px、组间 8px），
-          移除所有 .toolbar-divider 分隔线。
-       4. 所有图标按钮添加 data-icon-only 属性，由 CSS 渲染为方形 32×32。
-       5. 工具栏静止时透明（依赖 CSS）。
+     【本次重构说明】
+       1. 帮助弹窗中的 <kbd>⚙️ 按钮</kbd> 去除 Emoji，
+          改为纯文字 <kbd>设置按钮</kbd>，与状态栏去 Emoji 的方向一致。
+       2. 语言下拉框中的 "JV" 改为 "Java"，
+          避免用户误以为是其他缩写；其余选项保持紧凑（JS / HTML / CSS / PY / TXT）。
+       3. 其他 UI 结构、分组、SVG 图标、aria 属性、DOM id / class 完全保留。
+       4. 状态栏 aria-live 保留。
 
      【保留特性】
        - 编码扩展（6 种：auto / utf-8 / utf-8-bom / ansi / gbk / ascii）
@@ -52,7 +49,7 @@
                             <option value="html">HTML</option>
                             <option value="css">CSS</option>
                             <option value="python">PY</option>
-                            <option value="java">JV</option>
+                            <option value="java">Java</option>
                             <option value="txt">TXT</option>
                         </select>
                         <span class="language-select-arrow">▼</span>
@@ -240,7 +237,7 @@
                 <span id="highlightIcon" aria-hidden="true"></span>
                 <span id="highlightLabel">高亮</span>
             </div>
-            <div class="status-item" id="autoSaveStatus" style="color:var(--green);">自动保存</div>
+            <div class="status-item" id="autoSaveStatus" style="color:var(--text-secondary);">自动保存</div>
         </div>
     </div>
 
@@ -301,7 +298,7 @@
             <div class="shortcut-row"><span>缩小字体</span><kbd>Ctrl+ -</kbd></div>
             <div class="shortcut-row"><span>重置字体</span><kbd>Ctrl+0</kbd></div>
             <div class="shortcut-row"><span>切换主题</span><kbd>Ctrl+T</kbd></div>
-            <div class="shortcut-row"><span>设置导出/导入</span><kbd>⚙️ 按钮</kbd></div>
+            <div class="shortcut-row"><span>设置导出/导入</span><kbd>设置按钮</kbd></div>
             <p class="modal-note">
                 <strong>代码折叠</strong>为逻辑折叠：点击行号旁的 ▼ 可隐藏块内容的行号与高亮文字，但编辑器仍保留该区域的垂直高度（受 textarea 架构约束，无法像物理折叠那样压缩空间）。折叠隐藏行在行号列中显示为略深的背景色。
             </p>

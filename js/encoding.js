@@ -4,41 +4,36 @@
  * encoding.js — 编码统一入口 + UTF-8 / BOM / ANSI / GBK / ASCII
  * ============================================================================
  *
- * 本模块职责：
- *   1. 支持 6 种编码：
- *       · utf-8       —— TextEncoder / TextDecoder 原生
- *       · utf-8-bom   —— UTF-8 + 3 字节 BOM
- *       · ansi        —— 系统默认 ANSI（简中 Windows = GBK，GBK 不可用回退 ASCII）
- *       · gbk         —— 明确 GBK（不支持时硬报错）
- *       · ascii       —— 纯 ASCII（非 ASCII 字符替换为 '?'）
- *   2. UTF-8 字节流有效性检测（isValidUTF8）
- *   3. 纯 ASCII 编码（含代理对处理）
- *   4. 统一编码入口（encodeTextToBytes / decodeTextFromBytes）
- *   5. UI 集成（编码显示 / 下拉框事件绑定）
+ * 【本次重构】
+ *   1. bindEncodingSelectEvents 的 Toast 增强（编码标准合规性）：
+ *      原实现在用户切换编码后只显示"编码格式已切换为 X"，
+ *      没有告知用户 'ansi' 在当前环境下的实际编码。
  *
- * 【本次更新】
- *   1. encodeTextToBytes 与 decodeTextFromBytes 的 default 分支
- *      增加 console.warn —— 遇到未知编码值（如旧版遗留的 windows-1252）
- *      时明确记录降级行为，避免用户以为保存/读取的是非 UTF-8 编码。
+ *      新行为：
+ *        · 若用户选择 'ansi'，Toast 追加 "（当前环境实际使用 GBK/ASCII）"；
+ *        · 若用户选择 'gbk' 但浏览器不支持，Toast 追加 "（浏览器不支持）"；
+ *        · 其他编码保持原简短提示。
+ *      这样用户无需查阅文档就能理解 ANSI 的妥协语义。
  *
- *   2. UI 美化一致性：
- *      updateEncodingDisplay 与 updateEncodingStatusOnly 移除状态栏
- *      Emoji 前缀 '📄 '。原实现在状态栏显示 "📄 自动检测"，与本次
- *      UI 美化"状态栏全文字 + 状态点"的目标不一致（高亮指示器已改为
- *      6px 圆点 + 纯文字，自动保存指示器已改为纯文字）。本模块的
- *      Emoji 是最后残留的一处，现统一去除。
+ *   2. updateEncodingDisplay 与 updateEncodingStatusOnly 保持不变：
+ *      · 状态栏仍用简短显示名（ENCODING_DISPLAY_NAMES）；
+ *      · 详细描述由 index.html 的 option title 与本次 Toast 承担。
  *
- *      状态栏最终形态：纯文字编码名（如"自动检测"），与其他信息块
- *      （"行 0 · 字符 0"、"JavaScript"、"缩进 4 空格"）风格统一。
- *
- * 依赖：
- *   - state.js / config.js / util.js / dom.js / toast.js
- *   - gbk-codec.js（GBK 编解码委托）
+ *   3. 保留全部原有导出接口与行为：
+ *      detectBOMEncoding / stripBOMFromArrayBuffer / isValidUTF8 /
+ *      encodeTextToAscii / encodeTextToAnsi / decodeTextFromAnsi /
+ *      resolveActualAnsiEncoding / encodeTextToBytes / decodeTextFromBytes /
+ *      updateEncodingDisplay / updateEncodingStatusOnly /
+ *      initializeEncodingSettings / bindEncodingSelectEvents。
  * ============================================================================
  */
 
 import { EditorState } from './state.js';
-import { STORAGE_KEYS, ENCODING_DISPLAY_NAMES } from './config.js';
+import {
+    STORAGE_KEYS,
+    ENCODING_DISPLAY_NAMES,
+    ENCODING_LONG_DESCRIPTIONS
+} from './config.js';
 import { saveToLocalStorage, loadFromLocalStorage } from './util.js';
 import { DOM } from './dom.js';
 import { showToast } from './toast.js';
@@ -134,12 +129,6 @@ export function isValidUTF8(arrayBuffer) {
  * 代理对处理：
  *   BMP 外字符（如 emoji）在 UTF-16 中占用 2 个码元（高代理 + 低代理）。
  *   本函数将其视为一个逻辑字符，只替换为一个 '?'。
- *
- * 适用场景：老式 .bat / .cmd 脚本，某些老式 Windows 环境无法正确处理
- * 非 ASCII 字节，用纯 ASCII 保证兼容性。
- *
- * @param {string} text
- * @returns {Uint8Array}
  */
 export function encodeTextToAscii(text) {
     const byteArray = [];
@@ -180,12 +169,6 @@ export function encodeTextToAscii(text) {
  * 与 'gbk' 的关键差异：
  *   · 'gbk'   —— 不支持时硬报错，由调用方提示用户
  *   · 'ansi'  —— 不支持时静默回退 ASCII，符合"系统默认"的语义
- *
- * 注意：本函数不做静默检查 —— 调用方（file-io.js）应根据
- * resolveActualAnsiEncoding() 的返回值在 UI 层提示用户"已回退到 ASCII"。
- *
- * @param {string} text
- * @returns {Uint8Array}
  */
 export function encodeTextToAnsi(text) {
     if (isGBKSupported()) {
@@ -199,9 +182,6 @@ export function encodeTextToAnsi(text) {
  * 从 ArrayBuffer 解码为 ANSI 文本。
  * 优先使用 GBK 解码（简中 Windows 默认）；不支持时回退 UTF-8 解码器
  * （ASCII 是 UTF-8 严格子集，UTF-8 解码器可正确处理纯 ASCII 字节）。
- *
- * @param {ArrayBuffer} arrayBuffer
- * @returns {string}
  */
 export function decodeTextFromAnsi(arrayBuffer) {
     if (isGBKSupported()) {
@@ -213,7 +193,6 @@ export function decodeTextFromAnsi(arrayBuffer) {
 
 /**
  * 判断给定的 'ansi' 编码在当前环境下实际使用的编码。
- * 供调用方在 UI 层展示"实际编码"提示。
  *
  * 返回值：
  *   · 'gbk'    —— GBK 支持，'ansi' 实际走 GBK
@@ -261,8 +240,6 @@ export function encodeTextToBytes(text, encoding) {
             return encodeTextToAscii(text);
         default:
             // 未知 / 历史遗留编码值（含被移除的 windows-1252）：降级为 UTF-8。
-            // 输出 console.warn 让开发者 / 高级用户在控制台能看到降级事实，
-            // 避免"以为是 GBK 实际是 UTF-8"这类静默不匹配。
             console.warn('未知编码值:', encoding, '，编码时已降级为 UTF-8');
             return new TextEncoder().encode(text);
     }
@@ -272,8 +249,6 @@ export function encodeTextToBytes(text, encoding) {
  * 从字节数组解码为文本。
  *
  * 支持：utf-8 / utf-8-bom / ansi / gbk / ascii。
- * ANSI 与 GBK 均委托 gbk-codec.js（ANSI 内部有软回退）；
- * ASCII 用 UTF-8 解码器处理（ASCII 是 UTF-8 子集）。
  *
  * @param {ArrayBuffer} arrayBuffer
  * @param {string} encoding
@@ -291,7 +266,6 @@ export function decodeTextFromBytes(arrayBuffer, encoding) {
     const strippedBuffer = stripBOMFromArrayBuffer(arrayBuffer, encoding);
 
     // 'ascii' 解码用 UTF-8 解码器（ASCII 是 UTF-8 严格子集）。
-    // 若文件中出现非 ASCII 字节（不应发生），UTF-8 解码器以替换字符处理。
     const decoderEncodingMap = {
         'utf-8': 'utf-8',
         'utf-8-bom': 'utf-8',
@@ -299,8 +273,6 @@ export function decodeTextFromBytes(arrayBuffer, encoding) {
     };
     let decoderEncoding = decoderEncodingMap[encoding];
     if (!decoderEncoding) {
-        // 未知 / 历史遗留编码值（含被移除的 windows-1252）→ 回退 utf-8。
-        // 输出 console.warn 明确降级事实，避免静默错误。
         console.warn('未知编码值:', encoding, '，解码时已降级为 UTF-8');
         decoderEncoding = 'utf-8';
     }
@@ -321,9 +293,6 @@ export function decodeTextFromBytes(arrayBuffer, encoding) {
  * 更新编码下拉框与状态栏显示。
  *
  * 状态栏只显示编码名（如"自动检测"），不带任何前缀符号。
- * 与状态栏其他信息块（"行 0 · 字符 0"、"JavaScript"、"缩进 4 空格"）
- * 风格统一。
- *
  * 同时更新 EditorState.currentEncoding 并持久化到 localStorage。
  */
 export function updateEncodingDisplay(encoding) {
@@ -365,20 +334,57 @@ export function initializeEncodingSettings() {
 }
 
 /**
+ * 构造编码切换后的 Toast 文本。
+ *
+ * 分层策略：
+ *   · 第一层：显示名（简短，与状态栏一致）；
+ *   · 第二层：针对 'ansi' / 'gbk' 追加"实际行为"提示；
+ *   · 第三层：动作影响范围。
+ *
+ * 之所以不在 Toast 中直接展示 ENCODING_LONG_DESCRIPTIONS 的完整文案，
+ * 是因为 Toast 有 max-width: 80vw 限制，过长会截断。详细描述由
+ * index.html 的 option title 承担（用户悬停即可看到）。
+ */
+function buildEncodingSwitchToastMessage(selectedEncoding, actionHint) {
+    const displayName = ENCODING_DISPLAY_NAMES[selectedEncoding] || selectedEncoding;
+    let message = '编码格式已切换为 ' + displayName;
+
+    if (selectedEncoding === 'ansi') {
+        const actualAnsi = resolveActualAnsiEncoding();
+        message += '（当前环境实际使用 ' + (actualAnsi === 'gbk' ? 'GBK' : '纯 ASCII') + '）';
+    } else if (selectedEncoding === 'gbk' && !isGBKSupported()) {
+        message += '（当前浏览器不支持，使用时将提示）';
+    }
+
+    message += '，' + actionHint;
+    return message;
+}
+
+/**
  * 绑定编码下拉框的 change 事件。
  *
  * 切换后：
  *   · 更新下拉框与状态栏；
  *   · 持久化到 localStorage；
- *   · 给出 Toast 提示，说明影响范围（导入自动检测 / 导出推荐 / 强制编码）。
+ *   · 给出 Toast 提示，说明影响范围（导入自动检测 / 导出推荐 / 强制编码），
+ *     并对 'ansi' / 'gbk' 追加实际行为提示。
  */
 export function bindEncodingSelectEvents() {
     DOM.encodingSelect.addEventListener('change', function() {
         const selectedEncoding = this.value;
         updateEncodingDisplay(selectedEncoding);
+
+        // 同步更新下拉框 option 的 title，展示详细描述。
+        // 这样即便用户没有悬停，切换后也能通过 title 属性复核。
+        const selectedOption = DOM.encodingSelect.options[DOM.encodingSelect.selectedIndex];
+        if (selectedOption && ENCODING_LONG_DESCRIPTIONS[selectedEncoding]) {
+            selectedOption.title = ENCODING_LONG_DESCRIPTIONS[selectedEncoding];
+        }
+
         const actionHint = (selectedEncoding === 'auto')
             ? '导入时将自动检测编码，导出时按文件后缀推荐'
             : '将影响后续导入导出的编码格式';
-        showToast('编码格式已切换为 ' + ENCODING_DISPLAY_NAMES[selectedEncoding] + '，' + actionHint);
+
+        showToast(buildEncodingSwitchToastMessage(selectedEncoding, actionHint));
     });
 }

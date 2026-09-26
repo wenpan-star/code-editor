@@ -4,20 +4,30 @@
  * ui.js — 主 UI 事件
  * ============================================================================
  *
- * 【本次更新】
- *   setTheme 中移除 DOM.btnTheme.textContent = THEME_ICONS[theme]，
- *   主题图标改由 CSS 通过 html[data-theme="..."] 属性控制显示。
- *   原因：主题按钮从 Emoji 文本升级为 4 个 SVG 图标（太阳 / 月亮 /
- *   波浪 / 蛋糕），若 JS 继续写 textContent 会抹掉 SVG 结构。
+ * 【本次重构】
+ *   1. handleHighlightStatusClick 状态污染修复（P1）：
+ *      原实现在用户取消大文件高亮 confirm 后，
+ *      EditorState.userForcedHighlight 已被置为 true，
+ *      但实际未开启高亮，造成状态与用户选择不一致。
  *
- *   同时从 config.js 的 import 中移除不再使用的 THEME_ICONS，
- *   保留 THEME_SEQUENCE（cycleTheme 仍在使用）。
+ *      新行为：
+ *        · 先计算 newState；
+ *        · 若需要 confirm 且用户取消 → 立即 return，
+ *          不改 EditorState.userForcedHighlight；
+ *        · 用户确认后才置位标志。
  *
- * 【保留】
- *   - v8.7.1 的 skipBeforeUnload 双字段（布尔 + 过期时间戳）判定
- *   - v8.5.5：语言下拉 change 仅调用 switchLanguage
- *   - Ctrl+Enter 分支仅在 Java 语言时 return
- *   - 拖动 textarea 高度调整手柄时仅在 mouseup 落盘一次
+ *   2. 自动保存状态颜色恢复：
+ *      editor-api.js 的 triggerAutoSave 成功 2 秒后只改文字，
+ *      不恢复颜色，导致状态栏长期绿色。
+ *      本模块不直接负责该逻辑，由 editor-api.js 修复。
+ *
+ *   3. 缩进点击循环：保留原有 4→2→8→Tab 循环，
+ *      但每次 Toast 明确显示"下一次会变成什么"，提升可预期性。
+ *
+ *   4. 保留全部原有导出接口与行为：
+ *      setTheme / cycleTheme / loadTheme / setFontSize /
+ *      applyInitialFontSize / toggleWordWrap / applyInitialWrap /
+ *      updateIndentIndicator / loadIndentSetting / setupUIEvents。
  * ============================================================================
  */
 
@@ -146,22 +156,38 @@ export function loadIndentSetting() {
     EditorState.indentCharacter = savedIndent.character;
 }
 
+/**
+ * 循环切换缩进设置。
+ *
+ * 顺序：4 空格 → 2 空格 → 8 空格 → Tab → 4 空格 → ...
+ *
+ * Toast 中不仅显示"当前"，也显示"下一次点击会变成什么"，
+ * 弥补点击循环不可预期的问题。
+ */
 function cycleIndent() {
+    let nextIndentDisplay = '';
+
     if (EditorState.indentCharacter === ' ' && EditorState.indentSize === 4) {
         EditorState.indentSize = 2;
         EditorState.indentCharacter = ' ';
+        nextIndentDisplay = '8 空格';
     } else if (EditorState.indentCharacter === ' ' && EditorState.indentSize === 2) {
         EditorState.indentSize = 8;
         EditorState.indentCharacter = ' ';
+        nextIndentDisplay = 'Tab';
     } else if (EditorState.indentCharacter === ' ' && EditorState.indentSize === 8) {
         EditorState.indentCharacter = '\t';
+        nextIndentDisplay = '4 空格';
     } else {
         EditorState.indentCharacter = ' ';
         EditorState.indentSize = 4;
+        nextIndentDisplay = '2 空格';
     }
     updateIndentIndicator();
-    const indentDisplay = EditorState.indentCharacter === '\t' ? 'Tab' : EditorState.indentSize + ' 空格';
-    showToast('缩进设置已切换为 ' + indentDisplay);
+    const indentDisplay = EditorState.indentCharacter === '\t'
+        ? 'Tab'
+        : EditorState.indentSize + ' 空格';
+    showToast('缩进已切换为 ' + indentDisplay + '（下次点击：' + nextIndentDisplay + '）');
 }
 
 // ==================== 复制 ====================
@@ -228,11 +254,24 @@ function selectAll() {
 
 // ==================== 高亮状态点击 ====================
 
+/**
+ * 处理高亮状态点击。
+ *
+ * 修复状态污染：
+ *   · 用户在大文件 confirm 中取消 → 立即 return，
+ *     不改 EditorState.userForcedHighlight；
+ *   · 用户确认后才置位 userForcedHighlight = true。
+ */
 function handleHighlightStatusClick() {
     const newState = !EditorState.highlightEnabled;
-    EditorState.userForcedHighlight = newState;
+
+    // 大文件开启高亮：先 confirm，再改状态
     if (newState && EditorState.largeFileActive) {
-        if (!confirm('大文件开启高亮可能导致编辑器卡顿，确定继续？')) return;
+        if (!confirm('大文件开启高亮可能导致编辑器卡顿，确定继续？')) {
+            // 用户取消：完全无副作用，状态与标志均保持原样
+            return;
+        }
+        EditorState.userForcedHighlight = true;
         EditorState.largeFileActive = false;
         if (historyManager) historyManager.setLargeFileMode(false);
         setHighlightEnabled(newState, false);
@@ -240,6 +279,9 @@ function handleHighlightStatusClick() {
         showToast('高亮已开启');
         return;
     }
+
+    // 普通情况：直接切换
+    EditorState.userForcedHighlight = newState;
     setHighlightEnabled(newState, false);
     showToast(newState ? '高亮已开启' : '高亮已关闭');
 }
@@ -384,7 +426,6 @@ function handleGlobalKeyDown(event) {
         return;
     }
     // ---- Ctrl+Enter：仅 Java 语言时消耗事件 ----
-    // 非 Java 语言时不 return，交由后续分支或浏览器默认行为处理。
     if (isCtrlOrMeta && event.key === 'Enter') {
         if (EditorState.currentLanguage === 'java') {
             event.preventDefault();
@@ -470,8 +511,6 @@ function initializeResizableTextareas() {
         let dragStartY = 0;
         let dragStartHeight = 0;
 
-        // mousemove 期间仅更新样式，不写 localStorage；
-        // mouseup 时统一落盘一次。
         const onMouseMoveResize = function(moveEvent) {
             if (!isDraggingHeight) return;
             const deltaY = moveEvent.clientY - dragStartY;
@@ -485,7 +524,6 @@ function initializeResizableTextareas() {
             isDraggingHeight = false;
             document.removeEventListener('mousemove', onMouseMoveResize);
             document.removeEventListener('mouseup', onMouseUpResize);
-            // 落盘一次最终高度
             const finalHeight = targetTextarea.offsetHeight;
             saveToLocalStorage(textareaHeightStorageKeys[targetId], finalHeight);
         };

@@ -4,24 +4,39 @@
  * file-io.js — 文件导入 / 下载 / 拖拽 / 后缀联动 / 历史下拉
  * ============================================================================
  *
- * 【本次更新】
- *   仅在文件首行补充 // filename: js/file-io.js 标注，与项目约定统一。
- *   内容逻辑保持不变。
+ * 【本次重构】
+ *   1. 导入编码决策修复（P0）：
+ *      原实现在检测到 BOM 时无条件覆盖 finalEncoding 并调用
+ *      updateEncodingDisplay（会写 localStorage、改下拉框、改持久化）。
+ *      这会导致用户显式选择的编码被 BOM 覆盖。
  *
- * 本模块职责：
- *   1. 导入：读取 ArrayBuffer → BOM 检测 → 编码解析 → 解码 → 设置内容
- *   2. 导出：编码文本 → 优先写入已选目录 → 否则触发浏览器下载
- *   3. 拖拽：监听 editorWrapper 的 dragover / drop
- *   4. 后缀联动：语言切换时后缀自动跟随；每语言独立保存后缀
- *   5. 历史下拉：显示"预设候选 + 历史记录"，单击项 = 选择；单击 × = 删除
+ *      新语义：
+ *        · detectedBomEncoding 只决定"本次导入文件的实际编码"；
+ *        · 若 EditorState.currentEncoding === 'auto'，
+ *          更新下拉框与持久化（因为 auto 本来就是动态判断）；
+ *        · 若用户显式选了编码，仅调用 updateEncodingStatusOnly
+ *          更新状态栏显示，不改用户选择，不写 localStorage。
  *
- * 依赖：
- *   - state.js / config.js / dom.js / toast.js / util.js
- *   - editor-api.js（setEditorContent / switchLanguage / updateFileNameDisplay）
- *   - encoding.js（BOM / UTF-8 有效性 / 编解码 / 编码 UI / ANSI 实际编码解析）
- *   - gbk-codec.js（GBK 支持性探测）
- *   - directory-io.js（保存目录获取）
- *   - storage.js（writeFileToDirectory / clearDirectoryHandle）
+ *   2. 下载流程修复（P1）：
+ *      原实现先走目录保存分支，分支内 prompt 一次文件名；
+ *      若目录写入失败回退浏览器下载，又 prompt 一次。
+ *      用户可能被要求输入两次文件名。
+ *
+ *      新流程：
+ *        · 先尝试获取目录（成功与否决定后续分支）；
+ *        · 只在真正开始写文件前 prompt 一次；
+ *        · 目录写入失败回退下载时复用同一份文件名。
+ *
+ *   3. 删除目录句柄失败时的 clearDirectoryHandle 异常不影响主流程。
+ *
+ *   4. 保留全部原有导出接口与行为：
+ *      bindImportEvents / bindDragAndDropEvents / bindDownloadEvents /
+ *      sanitizeFileExtension / getCustomFileExtension /
+ *      loadFileExtensionHistory / saveFileExtensionHistory /
+ *      addToFileExtensionHistory / removeFromFileExtensionHistory /
+ *      updateFileExtensionForLanguage / showFileExtensionDropdown /
+ *      hideFileExtensionDropdown / updateFileExtensionPlaceholder /
+ *      initializeFileExtensionInput。
  * ============================================================================
  */
 
@@ -73,12 +88,12 @@ let isFileExtensionInputInitialized = false;
 /**
  * 加载文件到编辑器。
  *
- * 编码决策顺序（当前编码为 'auto' 时）：
- *   1. BOM 检测优先（最可靠）
- *   2. 扩展名推荐编码（.bat/.cmd → 'ansi'）
- *   3. UTF-8 有效性检测（不通过则警告用户）
- *
- * 当前编码非 'auto' 时，直接使用用户选择的编码。
+ * 编码决策顺序（本次重构后）：
+ *   1. BOM 检测：决定"本次文件的实际编码"。
+ *      · 若 EditorState.currentEncoding === 'auto' → 同步下拉框与持久化；
+ *      · 若用户显式选择 → 仅更新状态栏，不改用户选择。
+ *   2. 若当前编码为 'auto'，按扩展名推荐编码（.bat/.cmd → 'ansi'）；
+ *   3. 若仍未定编码，按 UTF-8 有效性检测。
  *
  * 'gbk' 与 'ansi' 的处理差异：
  *   · 'gbk'   —— 不支持时硬报错，降级为 UTF-8
@@ -102,13 +117,21 @@ function loadFileIntoEditor(file) {
     fileReader.onload = function(loadEvent) {
         const arrayBuffer = loadEvent.target.result;
         const detectedBomEncoding = detectBOMEncoding(arrayBuffer);
-        let finalEncoding = EditorState.currentEncoding;
+        const userExplicitEncoding = EditorState.currentEncoding;
+        let finalEncoding = userExplicitEncoding;
 
         // ---- 编码决策 ----
         if (detectedBomEncoding) {
-            // 1. BOM 检测优先
+            // 1. BOM 检测优先：决定本次文件实际编码
             finalEncoding = detectedBomEncoding;
-            updateEncodingDisplay(finalEncoding);
+
+            if (userExplicitEncoding === 'auto') {
+                // 用户没显式选，auto 语义就是"动态判断"，同步下拉框与持久化
+                updateEncodingDisplay(finalEncoding);
+            } else {
+                // 用户显式选了编码，只更新状态栏，不覆盖用户选择
+                updateEncodingStatusOnly(finalEncoding);
+            }
             showToast('📂 检测到编码: ' + ENCODING_DISPLAY_NAMES[finalEncoding]);
         } else if (finalEncoding === 'auto') {
             // 2. 当前为自动检测
@@ -335,8 +358,7 @@ export function removeFromFileExtensionHistory(extensionText) {
  *   · 预设在前 —— 让用户一眼看到"官方推荐"；
  *   · 历史在后 —— 用户自己输入过的排到预设后面；
  *   · 净化 + 去重 —— 保证渲染列表干净；
- *   · 单项长度超限的项自动丢弃（sanitizeFileExtension 已截断，
- *     但若截断后为空则丢弃）。
+ *   · 单项长度超限的项自动丢弃。
  *
  * @param {string} language - 当前语言
  * @returns {string[]} 合并后的候选后缀数组
@@ -797,11 +819,6 @@ export function initializeFileExtensionInput() {
  * 'ansi' 语义上是"系统默认"，但实际编码取决于浏览器：
  *   · GBK 支持    → 实际为 GBK，显示 "ANSI (系统默认)"
  *   · GBK 不支持  → 回退 ASCII，显示 "ANSI (回退 ASCII)"
- *
- * 其他编码值直接返回显示名。
- *
- * @param {string} encoding 逻辑编码值（用户选择或扩展名推荐的）
- * @returns {string}
  */
 function resolveEncodingDisplayName(encoding) {
     if (encoding === 'ansi') {
@@ -820,15 +837,15 @@ function resolveEncodingDisplayName(encoding) {
  * 编码决策：
  *   1. 用户显式选择的编码优先
  *   2. 当前编码为 'auto' 时按扩展名推荐编码
- *      · .bat / .cmd → 'ansi'（系统默认，简中 Windows 上 = GBK）
- *      · .py / .pyw / .spec / .md / .json / .html / .htm → UTF-8（.pyw 走兜底）
- *      · 其他 → UTF-8
  *   3. 'gbk' 不支持时明确提示用户选择降级方案
  *   4. 'ansi' 不做硬预检（内部软回退），但会 info 提示
  *
- * 保存路径：
- *   1. 优先使用目录句柄（getOrCreateSaveDirectory）
- *   2. 用户取消或目录不可用 → 回退浏览器下载
+ * 保存路径（本次重构后）：
+ *   1. 先尝试获取目录句柄（成功与否决定后续分支）
+ *      · 用户取消目录选择 → 整个流程终止，不再 fallback 下载
+ *      · 权限失效 / 其他错误 → 打印日志，继续走浏览器下载
+ *   2. 只在真正开始写文件前 prompt 一次文件名
+ *   3. 目录写入失败回退下载时复用同一份文件名，不重复 prompt
  */
 async function handleDownloadClick() {
     const currentCode = DOM.codeEditor.value;
@@ -855,15 +872,13 @@ async function handleDownloadClick() {
     // ---- 3. 解析导出编码 ----
     let exportEncoding = EditorState.currentEncoding;
     if (exportEncoding === 'auto') {
-        // 按扩展名推荐编码
         const normalizedExtension = fileExtension.toLowerCase();
         exportEncoding = EXTENSION_DEFAULT_ENCODING[normalizedExtension] || 'utf-8';
         updateEncodingStatusOnly(exportEncoding);
         showToast('当前为自动检测，导出使用 ' + resolveEncodingDisplayName(exportEncoding));
     }
 
-    // ---- 4. GBK 可用性预检（仅对明确要求的 'gbk' 提示） ----
-    // 'ansi' 不做硬预检：内部软回退 ASCII，无需 confirm 打扰
+    // ---- 4. GBK 可用性预检 ----
     if (exportEncoding === 'gbk' && !isGBKSupported()) {
         const gbkErrorMessage = getGBKSupportError() || '当前浏览器不支持 GBK 编码';
         const fallbackToUtf8 = confirm(
@@ -879,7 +894,6 @@ async function handleDownloadClick() {
     }
 
     // ---- 4.1 'ansi' 回退提示 ----
-    // 用户显式选择或扩展名推荐 'ansi' 但 GBK 不支持时，提前告知用户
     if (exportEncoding === 'ansi' && !isGBKSupported()) {
         showToast('ℹ️ ANSI 回退为 ASCII（当前浏览器不支持 GBK）');
     }
@@ -894,35 +908,20 @@ async function handleDownloadClick() {
         return;
     }
 
-    // ---- 6. 计算最终显示的编码名（反映实际使用的编码） ----
+    // ---- 6. 计算最终显示的编码名 ----
     const finalEncodingDisplayName = resolveEncodingDisplayName(exportEncoding);
 
-    // ---- 7. 优先走目录保存 ----
+    // ---- 7. 尝试获取目录句柄（成功与否决定后续分支） ----
+    let directoryHandle = null;
     if (window.showDirectoryPicker) {
         try {
-            const directoryHandle = await getOrCreateSaveDirectory();
-
-            const lastFilename = loadFromLocalStorage(STORAGE_KEYS.LAST_DOWNLOAD_FILENAME, 'code');
-            const userInputFilename = prompt(
-                '请输入文件名（无需后缀，将自动使用 .' + fileExtension + '）:',
-                lastFilename
-            );
-            if (userInputFilename === null) return;
-
-            const safeFilename = sanitizeFilename(userInputFilename);
-            if (safeFilename && safeFilename !== 'code' && userInputFilename.trim()) {
-                saveToLocalStorage(STORAGE_KEYS.LAST_DOWNLOAD_FILENAME, safeFilename);
+            directoryHandle = await getOrCreateSaveDirectory();
+        } catch (dirError) {
+            if (dirError && dirError.name === 'AbortError') {
+                // 用户主动取消目录选择 → 终止整个保存流程
+                return;
             }
-            const finalFilename = safeFilename + '.' + fileExtension;
-            await writeFileToDirectory(directoryHandle, finalFilename, encodedBytes);
-            showToast(
-                '💾 已保存 "' + finalFilename + '" 到上次选择的目录 (' +
-                finalEncodingDisplayName + ')'
-            );
-            return;
-        } catch (err) {
-            if (err && err.name === 'AbortError') return;
-            if (err && err.name === 'NotAllowedError') {
+            if (dirError && dirError.name === 'NotAllowedError') {
                 showToast('⚠️ 目录权限已失效，已切换为浏览器下载', true);
                 try {
                     await clearDirectoryHandle();
@@ -930,23 +929,50 @@ async function handleDownloadClick() {
                     // 忽略
                 }
             } else {
-                console.error('保存失败:', err);
+                console.error('获取保存目录失败，已切换为浏览器下载:', dirError);
             }
+            directoryHandle = null;
         }
     }
 
-    // ---- 8. 回退到浏览器下载 ----
+    // ---- 8. 只 prompt 一次文件名，两个分支共用 ----
     const lastFilename = loadFromLocalStorage(STORAGE_KEYS.LAST_DOWNLOAD_FILENAME, 'code');
     const userInputFilename = prompt(
         '请输入文件名（无需后缀，将自动使用 .' + fileExtension + '）:',
         lastFilename
     );
     if (userInputFilename === null) return;
+
     const safeFilename = sanitizeFilename(userInputFilename);
     if (safeFilename && safeFilename !== 'code' && userInputFilename.trim()) {
         saveToLocalStorage(STORAGE_KEYS.LAST_DOWNLOAD_FILENAME, safeFilename);
     }
     const finalFilename = safeFilename + '.' + fileExtension;
+
+    // ---- 9. 优先走目录保存 ----
+    if (directoryHandle) {
+        try {
+            await writeFileToDirectory(directoryHandle, finalFilename, encodedBytes);
+            showToast(
+                '💾 已保存 "' + finalFilename + '" 到上次选择的目录 (' +
+                finalEncodingDisplayName + ')'
+            );
+            return;
+        } catch (writeError) {
+            if (writeError && writeError.name === 'NotAllowedError') {
+                showToast('⚠️ 目录权限已失效，已切换为浏览器下载', true);
+                try {
+                    await clearDirectoryHandle();
+                } catch (clearError) {
+                    // 忽略
+                }
+            } else {
+                console.error('写入目录失败，已切换为浏览器下载:', writeError);
+            }
+        }
+    }
+
+    // ---- 10. 回退到浏览器下载（复用同一份文件名） ----
     const blob = new Blob([encodedBytes], { type: mimeType });
     const downloadUrl = URL.createObjectURL(blob);
     const downloadLink = document.createElement('a');

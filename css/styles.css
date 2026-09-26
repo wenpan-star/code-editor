@@ -3,45 +3,22 @@
  * styles.css — 在线代码编辑器 · 全站样式
  * ============================================================================
  *
- * 【本次更新说明 — UI 美化与设计系统统一】
- *   基于 VS Code 官方设计哲学（Calm / Focused / Consistent / Delightful）、
- *   JetBrains Islands 主题、Clay 与 Skyscanner 设计系统的最佳实践，
- *   对全站 UI 做如下重构：
+ * 【本次重构说明】
+ *   1. 状态栏可读性提升（P1）：
+ *      · .status-bar 字号由 var(--font-xs)（11px）提升为 12px；
+ *      · 状态栏项内间距从 var(--space-2)（4px）提升为 var(--space-3)（6px）；
+ *      · 状态栏最小高度从 26px 提升为 28px，与字号提升配套。
+ *      保持 --text-secondary 与 --text-tertiary 原有对比度不变，
+ *      保证暗色主题下状态栏可读性满足基础无障碍要求。
  *
- *   1. 设计 Token 系统
- *      · 4px 基础网格间距梯度（--space-1 ~ --space-6）
- *      · 圆角按高度层级分配（Control 4px / Inner 6px / Floating 8px）
- *      · 字重规范（仅 regular 400 / semibold 600，去掉 500）
+ *   2. 工具栏左右 padding 从 var(--space-5)（12px）提升为 var(--space-6)（16px），
+ *      使工具栏与状态栏的左右留白节奏一致。
  *
- *   2. 工具栏（VS Code "unearned chrome" 反模式的修复）
- *      · 静止时透明背景，去掉"永久 chrome"
- *      · 移除所有分隔线（.toolbar-divider → display: none）
- *      · 按功能分组为 .toolbar-group：组内 2px、组间 8px
- *      · 图标按钮统一为方形 32×32（data-icon-only 属性）
+ *   3. 工具栏分组之间 gap 保持 8px（--space-4），
+ *      分组内 gap 保持 2px（--space-1），未改变原有节奏。
  *
- *   3. 图标统一
- *      · 主题按钮改为 4 个 SVG（太阳 / 月亮 / 波浪 / 蛋糕），
- *        由 CSS 通过 html[data-theme] 属性控制显示
- *      · 设置按钮改为 SVG 齿轮，帮助按钮改为 SVG 问号圆圈
- *      · 状态栏高亮指示器改为"6px 圆点 + 文字"，去掉 Emoji
- *      · 状态栏自动保存指示器改为纯文字，去掉 Emoji
- *
- *   4. 按钮悬停分级
- *      · .btn-ghost：hover 仅背景变化（轻反馈）
- *      · .btn-primary / .btn-download / .btn-run：hover 变深 + 焦点环
- *      · #btnClear：hover 使用红色警示色（危险操作）
- *      · 焦点环采用双层方案（bg 垫底 + accent 显形），
- *        在任何背景色上都清晰可见
- *
- *   5. 状态栏
- *      · 信息块间距 12px、项内间距 4px
- *      · 去掉 Emoji，改为纯文字 + 状态点
- *      · 高度 26px（从 28px 微调，视觉更紧凑）
- *
- *   6. 兼容性
- *      · 保留 --radius / --radius-sm / --radius-lg 别名，兼容旧引用
- *      · 保留 .toolbar-divider 类，但 display: none
- *      · 所有 JS 依赖的 ID / class 完全保留
+ *   4. 未改动任何主题变量、组件类名、DOM 依赖的 ID / class，
+ *      所有 JS 依赖的选择器完全保留。
  * ============================================================================ */
 
 
@@ -68,9 +45,9 @@
     --weight-semibold: 600;
 
     /* ---- 兼容旧引用（等价重定向到新 token） ---- */
-    --radius-sm: var(--radius-control);   /* 旧 .btn 等 */
-    --radius: var(--radius-inner);        /* 旧 .modal kbd 等 */
-    --radius-lg: var(--radius-floating);  /* 旧 .modal 等 */
+    --radius-sm: var(--radius-control);
+    --radius: var(--radius-inner);
+    --radius-lg: var(--radius-floating);
 }
 
 
@@ -354,7 +331,8 @@ body {
  * 四、工具栏
  * ============================================================================ */
 
-/* 工具栏：静止时透明背景（去掉"永久 chrome"）
+/* 工具栏：静止时透明背景。
+   左右 padding 提升为 var(--space-6)（16px），与状态栏留白节奏一致。
    分组由 .toolbar-group 负责，无分隔线。
    组内 2px、组间 8px 的间距梯度替代视觉分隔。 */
 .toolbar {
@@ -362,7 +340,7 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: var(--space-6);
-    padding: var(--space-3) var(--space-5);
+    padding: var(--space-3) var(--space-6);
     min-height: 44px;
     background: transparent;
     border-bottom: 1px solid var(--border);
@@ -612,10 +590,6 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
 
 
 /* ---- 设置导出 / 导入按钮 + 下拉菜单 ---- */
-/* 齿轮按钮与帮助按钮均为纯 SVG 图标，位于工具栏右侧分组。
-   下拉菜单右对齐展开，视觉语言与 .file-extension-dropdown 一致。
-   菜单项 hover / focus 使用 --accent-subtle + --accent，
-   键盘导航焦点样式与 hover 视觉一致，避免额外视觉噪音。 */
 .settings-io-wrapper {
     position: relative;
     display: inline-flex;
@@ -753,8 +727,8 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
 }
 
 .language-select {
-    max-width: 80px;
-    min-width: 72px;
+    max-width: 86px;
+    min-width: 76px;
     font-weight: var(--weight-semibold);
     letter-spacing: 0.4px;
 }
@@ -980,8 +954,6 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
 }
 
 /* ---- 折叠隐藏行的占位容器 ---- */
-/* 折叠块内的隐藏行不显示行号数字，但保留行高以与 textarea 严格对齐。
-   通过轻微深色背景 + 半透明让用户直观感知"这几行被折叠了"。 */
 .line-numbers .line-container-folded {
     background: var(--surface-light);
     opacity: 0.55;
@@ -1074,20 +1046,22 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
  * 九、状态栏
  * ============================================================================ */
 
-/* 状态栏：信息块间距 12px、项内间距 4px
-   去掉 Emoji，改为纯文字 + 状态点 */
+/* 状态栏：
+   · 字号从 var(--font-xs)（11px）提升为 12px，改善可读性；
+   · 项内间距从 var(--space-2) 提升为 var(--space-3)；
+   · 最小高度从 26px 提升为 28px，与字号提升配套。 */
 .status-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-5);
-    padding: 0 var(--space-5);
-    min-height: 26px;
+    padding: 0 var(--space-6);
+    min-height: 28px;
     height: auto;
     background: var(--surface);
     color: var(--text-secondary);
     border-top: 1px solid var(--border);
-    font-size: var(--font-xs);
+    font-size: 12px;
     letter-spacing: 0.2px;
     font-weight: var(--weight-regular);
     user-select: none;
@@ -1098,7 +1072,7 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
 .status-item {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-3);
     cursor: default;
     white-space: nowrap;
 }
@@ -1126,7 +1100,7 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
     padding: 1px 6px;
     border-radius: var(--radius-control);
     font-weight: var(--weight-semibold);
-    font-size: var(--font-xs);
+    font-size: 12px;
     transition: background var(--transition), color var(--transition);
 }
 
@@ -1152,9 +1126,6 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
 }
 
 /* ---- 高亮指示器的状态点 ---- */
-/* JS 不再注入 Emoji，改为通过 #highlightStatus 的 color 属性切换颜色；
-   #highlightIcon 是一个 6px 圆形 span，background: currentColor，
-   颜色从父级继承（启用时绿、停用时灰）。 */
 #highlightIcon {
     display: inline-block;
     width: 6px;
@@ -1266,8 +1237,6 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
     font-size: var(--font-md);
 }
 
-/* 帮助弹窗中用于补充说明的段落（例如"逻辑折叠"说明）。
-   不参与 shortcut-row 的 flex 布局，使用独立的行高与对齐方式。 */
 .modal .modal-note {
     margin-top: 16px;
     padding: 10px 12px;
@@ -1649,7 +1618,7 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
 
 @media (max-width: 900px) {
     .toolbar {
-        padding: var(--space-2) var(--space-4);
+        padding: var(--space-2) var(--space-5);
         min-height: 40px;
     }
     .toolbar-group {
@@ -1694,8 +1663,8 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
         max-width: 110px;
     }
     .language-select {
-        max-width: 64px;
-        min-width: 60px;
+        max-width: 70px;
+        min-width: 64px;
     }
     .file-extension-input {
         width: 62px;
@@ -1733,6 +1702,7 @@ html[data-theme="cream"] #btnTheme .theme-icon-cream {
         height: auto;
         padding: var(--space-2) var(--space-4);
         gap: var(--space-3);
+        font-size: 12px;
     }
     .settings-io-dropdown {
         min-width: 160px;
